@@ -84,6 +84,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var isChannelReady = false
     private var responseBuffer: [UInt8] = []
     private var responseSemaphore: DispatchSemaphore?
+    private var expectedResponsePrefix: [UInt8] = []  // Expected command prefix for response validation
+    private let responseLock = NSLock()  // Lock for thread-safe buffer access
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -607,6 +609,53 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         return true
     }
     
+    // MARK: - Command Helpers
+    
+    /// Sends a command and waits for a response with the expected prefix
+    /// - Parameters:
+    ///   - command: The command bytes to send
+    ///   - expectedPrefix: The first 2 bytes expected in the response (command echo)
+    ///   - timeout: How long to wait for the response
+    /// - Returns: The response buffer, or empty if failed/timeout
+    private func sendCommandAndWait(command: [UInt8], expectedPrefix: [UInt8], timeout: TimeInterval = 2.0) -> [UInt8] {
+        guard let channel = rfcommChannel, channel.isOpen() else { return [] }
+        
+        // Drain any pending data first by waiting briefly
+        Thread.sleep(forTimeInterval: 0.05)
+        
+        // Set up for new command
+        responseLock.lock()
+        responseBuffer = []
+        expectedResponsePrefix = expectedPrefix
+        responseLock.unlock()
+        
+        responseSemaphore = DispatchSemaphore(value: 0)
+        
+        var data = command
+        var result: [UInt8] = []
+        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        if writeResult != kIOReturnSuccess {
+            print("Failed to send command: \(command.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+            responseSemaphore = nil
+            responseLock.lock()
+            expectedResponsePrefix = []
+            responseLock.unlock()
+            return []
+        }
+        
+        print("Sent command: \(command.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        
+        _ = responseSemaphore?.wait(timeout: .now() + timeout)
+        responseSemaphore = nil
+        
+        responseLock.lock()
+        let result_buffer = responseBuffer
+        expectedResponsePrefix = []
+        responseLock.unlock()
+        
+        return result_buffer
+    }
+    
     // MARK: - Fetch All Device Info
     
     private func fetchAllDeviceInfo() {
@@ -631,68 +680,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func fetchBatteryLevel() {
-        guard let channel = rfcommChannel, channel.isOpen() else { return }
-        
         // GET_BATTERY_LEVEL_SEND: [0x02, 0x02, 0x01, 0x00]
+        // Expected response: [0x02, 0x02, 0x03, 0x01, level]
         let command: [UInt8] = [0x02, 0x02, 0x01, 0x00]
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x02, 0x02])
         
-        responseBuffer = []
-        responseSemaphore = DispatchSemaphore(value: 0)
-        
-        var data = command
-        var result: [UInt8] = []
-        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            print("Failed to send battery command")
-            responseSemaphore = nil
-            return
-        }
-        
-        print("Sent battery command")
-        
-        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
-        responseSemaphore = nil
-        
-        // Expected: [0x02, 0x02, 0x03, 0x01, level]
-        if responseBuffer.count >= 5 && responseBuffer[0] == 0x02 && responseBuffer[1] == 0x02 && responseBuffer[2] == 0x03 {
-            let level = Int(responseBuffer[4])
+        if response.count >= 5 && response[0] == 0x02 && response[1] == 0x02 && response[2] == 0x03 {
+            let level = Int(response[4])
             print("Battery level: \(level)%")
             DispatchQueue.main.async {
                 self.updateBatteryInMenu(level)
             }
         } else {
-            print("Unexpected battery response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+            print("Unexpected battery response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
         }
     }
     
     private func fetchSerialNumber() {
-        guard let channel = rfcommChannel, channel.isOpen() else { return }
-        
         // GET_SERIAL_NUMBER_SEND: [0x00, 0x07, 0x01, 0x00]
+        // Expected response: [0x00, 0x07, 0x03, length, ...serial...]
         let command: [UInt8] = [0x00, 0x07, 0x01, 0x00]
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x00, 0x07])
         
-        responseBuffer = []
-        responseSemaphore = DispatchSemaphore(value: 0)
-        
-        var data = command
-        var result: [UInt8] = []
-        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            print("Failed to send serial command")
-            responseSemaphore = nil
-            return
-        }
-        
-        print("Sent serial command")
-        
-        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
-        responseSemaphore = nil
-        
-        // Expected: [0x00, 0x07, 0x03, length, ...serial...]
-        if responseBuffer.count >= 4 && responseBuffer[0] == 0x00 && responseBuffer[1] == 0x07 && responseBuffer[2] == 0x03 {
-            let length = Int(responseBuffer[3])
-            if responseBuffer.count >= 4 + length {
-                let serialBytes = Array(responseBuffer[4..<(4 + length)])
+        if response.count >= 4 && response[0] == 0x00 && response[1] == 0x07 && response[2] == 0x03 {
+            let length = Int(response[3])
+            if response.count >= 4 + length {
+                let serialBytes = Array(response[4..<(4 + length)])
                 if let serial = String(bytes: serialBytes, encoding: .utf8) {
                     print("Serial number: \(serial)")
                     DispatchQueue.main.async {
@@ -701,44 +714,38 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 }
             }
         } else {
-            print("Unexpected serial response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+            print("Unexpected serial response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
         }
     }
     
     private func fetchDeviceStatus() {
-        guard let channel = rfcommChannel, channel.isOpen() else { return }
-        
-        // First get device ID
+        // First get device ID: [0x00, 0x03, 0x01, 0x00]
         let deviceIdCommand: [UInt8] = [0x00, 0x03, 0x01, 0x00]
-        
-        responseBuffer = []
-        responseSemaphore = DispatchSemaphore(value: 0)
-        
-        var data = deviceIdCommand
-        var result: [UInt8] = []
-        var writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            print("Failed to send device ID command")
-            responseSemaphore = nil
-            return
-        }
-        
-        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
-        responseSemaphore = nil
+        _ = sendCommandAndWait(command: deviceIdCommand, expectedPrefix: [0x00, 0x03])
         
         Thread.sleep(forTimeInterval: 0.1)
         
         // GET_DEVICE_STATUS_SEND: [0x01, 0x01, 0x05, 0x00]
+        // This command returns multiple packets with different prefixes (0x01, 0x03), (0x01, 0x06), (0x01, 0x0b)
+        // We need to collect all of them
         let statusCommand: [UInt8] = [0x01, 0x01, 0x05, 0x00]
         
+        responseLock.lock()
         responseBuffer = []
+        expectedResponsePrefix = [0x01]  // Accept any response starting with 0x01
+        responseLock.unlock()
+        
         responseSemaphore = DispatchSemaphore(value: 0)
         
-        data = statusCommand
-        writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        var data = statusCommand
+        var result: [UInt8] = []
+        let writeResult = rfcommChannel?.writeAsync(&data, length: UInt16(data.count), refcon: &result)
         if writeResult != kIOReturnSuccess {
             print("Failed to send status command")
             responseSemaphore = nil
+            responseLock.lock()
+            expectedResponsePrefix = []
+            responseLock.unlock()
             return
         }
         
@@ -750,28 +757,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Wait for additional responses (device status comes in multiple packets)
         for _ in 0..<5 {
             responseSemaphore = DispatchSemaphore(value: 0)
-            let result = responseSemaphore?.wait(timeout: .now() + 0.5)
-            if result == .timedOut {
+            let waitResult = responseSemaphore?.wait(timeout: .now() + 0.5)
+            if waitResult == .timedOut {
                 break
             }
         }
         responseSemaphore = nil
         
-        print("Device status response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        responseLock.lock()
+        let statusResponse = responseBuffer
+        expectedResponsePrefix = []
+        responseLock.unlock()
+        
+        print("Device status response: \(statusResponse.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
         
         // Parse the response - it contains name, language, auto-off, NC level
-        parseDeviceStatusResponse()
+        parseDeviceStatusResponse(statusResponse)
     }
     
-    private func parseDeviceStatusResponse() {
+    private func parseDeviceStatusResponse(_ response: [UInt8]) {
         // The device status response is complex and contains multiple parts
         // We need to parse: name, language (with voice prompts bit), auto-off, NC level, self voice
         
         // Skip initial ACK bytes [0x01, 0x01, 0x07, 0x00]
         // Look for language response: [0x01, 0x03, 0x03, 0x05, language, 0x00, ?, ?, 0xde]
-        for i in 0..<responseBuffer.count {
-            if i + 4 < responseBuffer.count && responseBuffer[i] == 0x01 && responseBuffer[i+1] == 0x03 && responseBuffer[i+2] == 0x03 {
-                let langByte = responseBuffer[i+4]
+        for i in 0..<response.count {
+            if i + 4 < response.count && response[i] == 0x01 && response[i+1] == 0x03 && response[i+2] == 0x03 {
+                let langByte = response[i+4]
                 let voicePromptsOn = (langByte & 0x80) != 0
                 let langValue = langByte & 0x7F
                 
@@ -788,9 +800,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
         
         // Look for NC response: [0x01, 0x06, 0x03, 0x02, level, 0x0b]
-        for i in 0..<responseBuffer.count {
-            if i + 4 < responseBuffer.count && responseBuffer[i] == 0x01 && responseBuffer[i+1] == 0x06 && responseBuffer[i+2] == 0x03 {
-                let ncLevel = responseBuffer[i+4]
+        for i in 0..<response.count {
+            if i + 4 < response.count && response[i] == 0x01 && response[i+1] == 0x06 && response[i+2] == 0x03 {
+                let ncLevel = response[i+4]
                 let statusText: String
                 switch ncLevel {
                 case 0x00: statusText = "Off"
@@ -806,9 +818,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
         
         // Look for Self Voice response: [0x01, 0x0b, 0x03, 0x03, 0x01, level, 0x0f]
-        for i in 0..<responseBuffer.count {
-            if i + 5 < responseBuffer.count && responseBuffer[i] == 0x01 && responseBuffer[i+1] == 0x0b && responseBuffer[i+2] == 0x03 {
-                let selfVoiceLevel = responseBuffer[i+5]
+        for i in 0..<response.count {
+            if i + 5 < response.count && response[i] == 0x01 && response[i+1] == 0x0b && response[i+2] == 0x03 {
+                let selfVoiceLevel = response[i+5]
                 let levelText: String
                 switch selfVoiceLevel {
                 case 0x00: levelText = "Off"
@@ -826,40 +838,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func fetchPairedDevices() {
-        guard let channel = rfcommChannel, channel.isOpen() else { return }
-        
         // GET_PAIRED_DEVICES_SEND: [0x04, 0x04, 0x01, 0x00]
+        // Expected response: [0x04, 0x04, 0x03, numDevices*6, numConnected, ...addresses...]
         let command: [UInt8] = [0x04, 0x04, 0x01, 0x00]
-        
-        responseBuffer = []
-        responseSemaphore = DispatchSemaphore(value: 0)
-        
-        var data = command
-        var result: [UInt8] = []
-        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            print("Failed to send paired devices command")
-            responseSemaphore = nil
-            return
-        }
-        
-        print("Sent paired devices command")
-        
-        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
-        responseSemaphore = nil
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x04])
         
         // Expected: [0x04, 0x04, 0x03, numDevices*6, numConnected, ...addresses...]
         // numConnected includes the current device
         // Device order: [current device, other connected devices..., paired but not connected devices...]
-        if responseBuffer.count >= 5 && responseBuffer[0] == 0x04 && responseBuffer[1] == 0x04 && responseBuffer[2] == 0x03 {
-            let numDevicesBytes = Int(responseBuffer[3])
+        if response.count >= 5 && response[0] == 0x04 && response[1] == 0x04 && response[2] == 0x03 {
+            let numDevicesBytes = Int(response[3])
             let numDevices = numDevicesBytes / 6
-            let numConnected = Int(responseBuffer[4])
+            let numConnected = Int(response[4])
             
             print("===== PAIRED DEVICES DEBUG =====")
             print("Total paired devices: \(numDevices)")
             print("Number connected (including current): \(numConnected)")
-            print("Raw response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+            print("Raw response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
             print("================================")
             
             var devices: [String] = []
@@ -870,8 +865,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             // - Next (numConnected - 1) devices are other connected devices
             // - Remaining devices are paired but not connected
             for i in 0..<numDevices {
-                if offset + 6 <= responseBuffer.count {
-                    let addressBytes = Array(responseBuffer[offset..<(offset + 6)])
+                if offset + 6 <= response.count {
+                    let addressBytes = Array(response[offset..<(offset + 6)])
                     let address = addressBytes.map { String(format: "%02X", $0) }.joined(separator: ":")
                     
                     // Try to get the device name
@@ -939,7 +934,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 }
             }
         } else {
-            print("Unexpected paired devices response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+            print("Unexpected paired devices response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
         }
     }
     
@@ -1007,11 +1002,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         print(">>> RECEIVED \(dataLength) bytes: \(responseData.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
         
-        // Store response for synchronous commands
-        responseBuffer.append(contentsOf: responseData)
-        responseSemaphore?.signal()
+        // Thread-safe buffer access
+        responseLock.lock()
         
-        // Parse the response for NC status
+        // Check if this response matches what we're expecting
+        let expectedPrefix = expectedResponsePrefix
+        var isExpectedResponse = expectedPrefix.isEmpty
+        
+        if !isExpectedResponse && !responseData.isEmpty {
+            if expectedPrefix.count == 1 {
+                // Single byte prefix match (used for device status which has multiple response types)
+                isExpectedResponse = responseData[0] == expectedPrefix[0]
+            } else if expectedPrefix.count >= 2 && responseData.count >= 2 {
+                // Two byte prefix match
+                isExpectedResponse = responseData[0] == expectedPrefix[0] && responseData[1] == expectedPrefix[1]
+            }
+        }
+        
+        if isExpectedResponse {
+            // Store response for synchronous commands
+            responseBuffer.append(contentsOf: responseData)
+            responseLock.unlock()
+            responseSemaphore?.signal()
+        } else {
+            // Log unexpected response but don't add to buffer - it's likely a late response from a previous command
+            print(">>> DISCARDING unexpected response (expected prefix: \(expectedPrefix.map { String(format: "0x%02X", $0) }.joined(separator: " ")))")
+            responseLock.unlock()
+        }
+        
+        // Parse the response for NC status (always process NC updates)
         // Bose response formats:
         // GET response: [0x01, 0x06, 0x04, 0x01, level] - 5 bytes
         // SET response: [0x01, 0x06, 0x03, 0x02, level, checksum] - 6 bytes
