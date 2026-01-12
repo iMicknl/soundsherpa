@@ -990,68 +990,82 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func connectPairedDevice(address: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
+            guard let self = self else { return }
+            
+            // Convert address string to bytes
+            guard let addressBytes = self.addressStringToBytes(address) else {
+                print("Invalid address format: \(address)")
                 return
             }
             
-            guard let device = pairedDevices.first(where: { btDevice in
-                if let deviceAddress = btDevice.addressString {
-                    let cleanDeviceAddr = deviceAddress.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
-                    let cleanTargetAddr = address.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
-                    return cleanDeviceAddr == cleanTargetAddr
-                }
-                return false
-            }) else {
-                print("Could not find device with address: \(address)")
-                return
-            }
+            // Build CONNECT_DEVICE command: [0x04, 0x01, 0x05, 0x07, 0x00, <6 bytes address>]
+            var command: [UInt8] = [0x04, 0x01, 0x05, 0x07, 0x00]
+            command.append(contentsOf: addressBytes)
             
-            if !device.isConnected() {
-                print("Connecting to device: \(device.name ?? address)")
-                let result = device.openConnection()
-                if result == kIOReturnSuccess {
-                    Thread.sleep(forTimeInterval: 1.0)
-                    DispatchQueue.main.async {
-                        self?.checkForBoseDevices()
-                    }
-                } else {
-                    print("Failed to connect: \(result)")
+            print("Sending connect command to Bose for device: \(address)")
+            let response = self.sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x01], timeout: 2.0)
+            
+            if response.count >= 4 && response[0] == 0x04 && response[1] == 0x01 && response[2] == 0x07 {
+                print("Connect command acknowledged for device: \(address)")
+                Thread.sleep(forTimeInterval: 1.0)
+                DispatchQueue.main.async {
+                    self.fetchPairedDevices()
                 }
+            } else {
+                print("Connect command failed or no response. Response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
             }
         }
     }
     
     private func disconnectPairedDevice(address: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
+            guard let self = self else { return }
+            
+            // Convert address string to bytes
+            guard let addressBytes = self.addressStringToBytes(address) else {
+                print("Invalid address format: \(address)")
                 return
             }
             
-            guard let device = pairedDevices.first(where: { btDevice in
-                if let deviceAddress = btDevice.addressString {
-                    let cleanDeviceAddr = deviceAddress.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
-                    let cleanTargetAddr = address.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
-                    return cleanDeviceAddr == cleanTargetAddr
-                }
-                return false
-            }) else {
-                print("Could not find device with address: \(address)")
-                return
-            }
+            // Build DISCONNECT_DEVICE command: [0x04, 0x02, 0x05, 0x06, <6 bytes address>]
+            var command: [UInt8] = [0x04, 0x02, 0x05, 0x06]
+            command.append(contentsOf: addressBytes)
             
-            if device.isConnected() {
-                print("Disconnecting device: \(device.name ?? address)")
-                let result = device.closeConnection()
-                if result == kIOReturnSuccess {
-                    Thread.sleep(forTimeInterval: 0.5)
-                    DispatchQueue.main.async {
-                        self?.checkForBoseDevices()
-                    }
-                } else {
-                    print("Failed to disconnect: \(result)")
+            print("Sending disconnect command to Bose for device: \(address)")
+            let response = self.sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x02], timeout: 2.0)
+            
+            if response.count >= 4 && response[0] == 0x04 && response[1] == 0x02 && response[2] == 0x07 {
+                print("Disconnect command acknowledged for device: \(address)")
+                Thread.sleep(forTimeInterval: 0.5)
+                DispatchQueue.main.async {
+                    self.fetchPairedDevices()
                 }
+            } else {
+                print("Disconnect command failed or no response. Response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
             }
         }
+    }
+    
+    private func addressStringToBytes(_ address: String) -> [UInt8]? {
+        // Remove separators and convert to uppercase
+        let cleanAddress = address.replacingOccurrences(of: ":", with: "")
+                                  .replacingOccurrences(of: "-", with: "")
+                                  .uppercased()
+        
+        guard cleanAddress.count == 12 else { return nil }
+        
+        var bytes: [UInt8] = []
+        var index = cleanAddress.startIndex
+        
+        for _ in 0..<6 {
+            let nextIndex = cleanAddress.index(index, offsetBy: 2)
+            let byteString = String(cleanAddress[index..<nextIndex])
+            guard let byte = UInt8(byteString, radix: 16) else { return nil }
+            bytes.append(byte)
+            index = nextIndex
+        }
+        
+        return bytes
     }
     
     // MARK: - Device Discovery
