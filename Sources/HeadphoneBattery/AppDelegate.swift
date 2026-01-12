@@ -763,7 +763,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func parseDeviceStatusResponse() {
         // The device status response is complex and contains multiple parts
-        // We need to parse: name, language (with voice prompts bit), auto-off, NC level
+        // We need to parse: name, language (with voice prompts bit), auto-off, NC level, self voice
         
         // Skip initial ACK bytes [0x01, 0x01, 0x07, 0x00]
         // Look for language response: [0x01, 0x03, 0x03, 0x05, language, 0x00, ?, ?, 0xde]
@@ -798,6 +798,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 }
                 DispatchQueue.main.async {
                     self.updateMenuWithNCStatus(statusText)
+                }
+                break
+            }
+        }
+        
+        // Look for Self Voice response: [0x01, 0x0b, 0x03, 0x03, 0x01, level, 0x0f]
+        for i in 0..<responseBuffer.count {
+            if i + 5 < responseBuffer.count && responseBuffer[i] == 0x01 && responseBuffer[i+1] == 0x0b && responseBuffer[i+2] == 0x03 {
+                let selfVoiceLevel = responseBuffer[i+5]
+                let levelText: String
+                switch selfVoiceLevel {
+                case 0x00: levelText = "Off"
+                case 0x01: levelText = "High"
+                case 0x02: levelText = "Medium"
+                case 0x03: levelText = "Low"
+                default: levelText = "Level \(selfVoiceLevel)"
+                }
+                DispatchQueue.main.async {
+                    self.updateSelfVoiceInMenu(levelText)
                 }
                 break
             }
