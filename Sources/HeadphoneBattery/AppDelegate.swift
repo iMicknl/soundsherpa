@@ -384,8 +384,26 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var currentAutoOffLevel: UInt8 = 0xFF // Unknown
     private var pairedDevicesList: [PairedDeviceInfo] = [] // Store paired devices for menu actions
     
+    // Cached device info for immediate display
+    private var cachedBatteryLevel: Int?
+    private var cachedFirmwareVersion: String?
+    private var cachedSerialNumber: String?
+    private var cachedAudioCodec: String?
+    private var cachedServices: String?
+    private var cachedLanguage: PromptLanguage?
+    private var cachedVoicePromptsEnabled: Bool?
+    private var lastDataFetchTime: Date?
+    private let cacheValidityDuration: TimeInterval = 30.0 // Cache is valid for 30 seconds
+    
+    // Bluetooth connection monitoring
+    private var currentBoseDevice: IOBluetoothDevice?
+    private var connectionNotification: IOBluetoothUserNotification?
+    private var disconnectionNotification: IOBluetoothUserNotification?
+    private var lastConnectionAttempt: Date?
+    
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
+        setupBluetoothNotifications()
         checkForBoseDevices()
         
         updateTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
@@ -402,6 +420,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     func applicationWillTerminate(_ notification: Notification) {
         updateTimer?.invalidate()
         ncUpdateTimer?.invalidate()
+        
+        // Clean up Bluetooth notifications
+        connectionNotification?.unregister()
+        disconnectionNotification?.unregister()
         
         if let channel = rfcommChannel, channel.isOpen() {
             _ = channel.close()
@@ -499,6 +521,119 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         menu.addItem(quitItem)
         
         statusItem?.menu = menu
+        
+        // Initialize menu with cached values if available
+        initializeMenuWithCachedValues()
+    }
+    
+    private func setupBluetoothNotifications() {
+        // For now, let's use a simpler approach - just register for general connection notifications
+        // The main benefit is detecting disconnections via rfcommChannelClosed
+        connectionNotification = IOBluetoothDevice.register(forConnectNotifications: self, selector: #selector(deviceConnected(_:device:)))
+    }
+    
+    private func setupDeviceSpecificNotifications(for device: IOBluetoothDevice) {
+        // Register for disconnection notifications on the specific device
+        // Only if we don't already have one registered
+        if disconnectionNotification == nil {
+            disconnectionNotification = device.register(forDisconnectNotification: self, selector: #selector(deviceDisconnected(_:device:)))
+        }
+    }
+    
+    @objc private func deviceConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        // Simple approach - just note that a Bose device connected, but don't interfere with normal operation
+        if isBoseDevice(device) {
+            print("Bose device connected: \(device.name ?? "Unknown")")
+            currentBoseDevice = device
+            setupDeviceSpecificNotifications(for: device)
+        }
+    }
+    
+    @objc private func deviceDisconnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        // Only act on disconnection of our current device
+        if isBoseDevice(device) && currentBoseDevice?.addressString == device.addressString {
+            print("Bose device disconnected: \(device.name ?? "Unknown")")
+            currentBoseDevice = nil
+            disconnectionNotification = nil // Clear the notification
+            
+            // Update menu to show disconnected state
+            DispatchQueue.main.async {
+                self.updateMenuWithNoDevice()
+            }
+        }
+    }
+    
+    private func isBoseDevice(_ device: IOBluetoothDevice) -> Bool {
+        guard let name = device.name else { return false }
+        return name.lowercased().contains("bose")
+    }
+    
+    private func initializeMenuWithCachedValues() {
+        // Only show cached values if device is currently connected
+        guard let info = currentHeadphoneInfo, info.isConnected else {
+            return // Don't show cached info when disconnected
+        }
+        
+        // Show cached battery level if available
+        if let battery = cachedBatteryLevel {
+            updateDeviceHeader(name: info.name, battery: battery, isConnected: true)
+            updateStatusBarIcon(batteryLevel: battery)
+        }
+        
+        // Show cached NC level
+        if currentNCLevel != 0xFF {
+            updateNCSelection(level: currentNCLevel)
+        }
+        
+        // Show cached self voice level
+        if currentSelfVoiceLevel != 0xFF {
+            updateSelfVoiceSelection(level: currentSelfVoiceLevel)
+        }
+        
+        // Show cached auto-off level
+        if currentAutoOffLevel != 0xFF {
+            updateAutoOffSelection(level: currentAutoOffLevel)
+        }
+        
+        // Show cached language
+        if let language = cachedLanguage {
+            updateLanguageCheckmark(language)
+        }
+        
+        // Show cached voice prompts setting
+        if let voicePrompts = cachedVoicePromptsEnabled {
+            updateVoicePromptsCheckmark(voicePrompts)
+        }
+        
+        // Show cached info items (only if we have some cached data)
+        if cachedFirmwareVersion != nil || cachedSerialNumber != nil || cachedAudioCodec != nil || cachedServices != nil {
+            updateInfoSubmenu(
+                firmware: cachedFirmwareVersion,
+                codec: cachedAudioCodec,
+                vendorId: nil,
+                productId: nil,
+                services: cachedServices,
+                serial: cachedSerialNumber
+            )
+        }
+        
+        // Show cached paired devices
+        if !pairedDevicesList.isEmpty {
+            updatePairedDevicesMenu(pairedDevicesList, totalCount: pairedDevicesList.count, connectedCount: pairedDevicesList.filter { $0.isConnected }.count)
+        }
+    }
+    
+    private func shouldFetchFreshData() -> Bool {
+        guard let lastFetch = lastDataFetchTime else {
+            return true // No previous fetch, so fetch now
+        }
+        
+        let timeSinceLastFetch = Date().timeIntervalSince(lastFetch)
+        return timeSinceLastFetch > cacheValidityDuration
+    }
+    
+    private func markDataAsFetched() {
+        lastDataFetchTime = Date()
     }
     
     private func createDeviceHeaderItem(name: String, battery: Int?, isConnected: Bool = false) -> NSMenuItem {
@@ -931,6 +1066,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private func updateMenuItemsVisibility(isConnected: Bool) {
         guard let menu = statusItem?.menu else { return }
         
+        // Don't aggressively close RFCOMM channel here - let it be managed elsewhere
+        // The channel should only be closed when we actually detect a real disconnection
+        
         // Update menu bar icon based on connection state
         if let button = statusItem?.button {
             let iconName = isConnected ? "headphones.over.ear" : "headphones.slash"
@@ -1219,6 +1357,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         print("Found Bose device: \(device.name ?? "Unknown") at \(device.addressString ?? "Unknown")")
         
+        // Store the current Bose device for notifications
+        currentBoseDevice = device
+        
+        // Set up device-specific disconnect notifications
+        setupDeviceSpecificNotifications(for: device)
+        
         if !device.isConnected() {
             print("Device not connected, attempting to connect...")
             let connectResult = device.openConnection()
@@ -1375,11 +1519,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     // MARK: - Fetch All Device Info
     
     private func fetchAllDeviceInfo() {
-        fetchBatteryLevel()
-        fetchSerialNumber()
-        fetchDeviceStatus()
-        fetchPairedDevices()
-        fetchAutoOffStatus()
+        // Only fetch fresh data if cache is stale or we don't have cached data
+        if shouldFetchFreshData() {
+            fetchBatteryLevel()
+            fetchSerialNumber()
+            fetchDeviceStatus()
+            fetchPairedDevices()
+            fetchAutoOffStatus()
+            markDataAsFetched()
+        } else {
+            // Use cached data - just update the menu with what we have
+            DispatchQueue.main.async {
+                self.initializeMenuWithCachedValues()
+            }
+        }
     }
     
     private func fetchBatteryLevel() {
@@ -1388,6 +1541,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         if response.count >= 5 && response[0] == 0x02 && response[1] == 0x02 && response[2] == 0x03 {
             let level = Int(response[4])
+            cachedBatteryLevel = level // Cache the battery level
             DispatchQueue.main.async {
                 self.updateBatteryInMenu(level)
             }
@@ -1403,6 +1557,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             if response.count >= 4 + length {
                 let serialBytes = Array(response[4..<(4 + length)])
                 if let serial = String(bytes: serialBytes, encoding: .utf8) {
+                    cachedSerialNumber = serial // Cache the serial number
                     DispatchQueue.main.async {
                         self.updateSerialInMenu(serial)
                     }
@@ -1465,6 +1620,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 currentLanguageValue = langByte
                 
                 if let lang = PromptLanguage(rawValue: langValue) {
+                    // Cache the language and voice prompts settings
+                    cachedLanguage = lang
+                    cachedVoicePromptsEnabled = voicePromptsOn
+                    
                     DispatchQueue.main.async {
                         self.updateLanguageCheckmark(lang)
                         self.updateVoicePromptsCheckmark(voicePromptsOn)
@@ -1698,7 +1857,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     func rfcommChannelClosed(_ rfcommChannel: IOBluetoothRFCOMMChannel!) {
+        print("RFCOMM channel closed")
         self.rfcommChannel = nil
+        
+        // Only update menu if we currently show as connected
+        // This prevents unnecessary updates during normal operation
+        if currentHeadphoneInfo?.isConnected == true {
+            DispatchQueue.main.async {
+                self.updateMenuWithNoDevice()
+            }
+        }
     }
 
     
@@ -1889,6 +2057,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func updateMenuWithHeadphoneInfo(_ info: HeadphoneInfo) {
         currentHeadphoneInfo = info
+        
+        // Cache the device info only when connected
+        if info.isConnected {
+            if let battery = info.batteryLevel {
+                cachedBatteryLevel = battery
+            }
+            cachedFirmwareVersion = info.firmwareVersion
+            cachedSerialNumber = info.serialNumber
+            cachedAudioCodec = info.audioCodec
+            cachedServices = info.services
+        } else {
+            // Clear cached values when disconnected to save memory and avoid stale data
+            cachedBatteryLevel = nil
+            cachedFirmwareVersion = nil
+            cachedSerialNumber = nil
+            cachedAudioCodec = nil
+            cachedServices = nil
+            cachedLanguage = nil
+            cachedVoicePromptsEnabled = nil
+            currentNCLevel = 0xFF
+            currentSelfVoiceLevel = 0xFF
+            currentAutoOffLevel = 0xFF
+            pairedDevicesList = []
+            lastDataFetchTime = nil // Clear cache timestamp
+        }
         
         // Update device header with name, battery, and connection status
         updateDeviceHeader(name: info.name, battery: info.batteryLevel, isConnected: info.isConnected)
