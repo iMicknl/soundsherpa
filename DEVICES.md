@@ -1,0 +1,1 @@
+QC35 II - firmware 4.8.1
