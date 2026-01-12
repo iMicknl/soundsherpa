@@ -348,6 +348,20 @@ enum AutoOff: UInt8 {
     }
 }
 
+enum ButtonAction: UInt8 {
+    case alexa = 0x01
+    case noiseCancellation = 0x02
+    case unknown = 0xFF
+    
+    var displayName: String {
+        switch self {
+        case .alexa: return "Alexa"
+        case .noiseCancellation: return "Noise Cancellation"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
 // MARK: - Menu Item Tags for easy lookup
 private enum MenuTag: Int {
     case deviceHeader = 100
@@ -382,6 +396,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var currentNCLevel: UInt8 = 0xFF // Unknown
     private var currentSelfVoiceLevel: UInt8 = 0xFF // Unknown
     private var currentAutoOffLevel: UInt8 = 0xFF // Unknown
+    private var currentButtonAction: UInt8 = 0xFF // Unknown
     private var pairedDevicesList: [PairedDeviceInfo] = [] // Store paired devices for menu actions
     
     // Cached device info for immediate display
@@ -492,7 +507,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let svMediumItem = createSelfVoiceMenuItem(title: "Medium", action: #selector(setSelfVoiceMedium), tag: MenuTag.svMedium.rawValue, iconName: "person.wave.2.fill")
         menu.addItem(svMediumItem)
         
-        let svHighItem = createSelfVoiceMenuItem(title: "High", action: #selector(setSelfVoiceHigh), tag: MenuTag.svHigh.rawValue, iconName: "person.2.wave.2.fill")
+        let svHighItem = createSelfVoiceMenuItem(title: "High", action: #selector(setSelfVoiceHigh), tag: MenuTag.svHigh.rawValue, iconName: "person.spatialaudio.stereo.fill")
         menu.addItem(svHighItem)
         
         menu.addItem(NSMenuItem.separator())
@@ -593,6 +608,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Show cached auto-off level
         if currentAutoOffLevel != 0xFF {
             updateAutoOffSelection(level: currentAutoOffLevel)
+        }
+        
+        // Show cached button action level
+        if currentButtonAction != 0xFF {
+            updateButtonActionSelection(level: currentButtonAction)
         }
         
         // Show cached language
@@ -846,6 +866,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         voicePromptsItem.submenu = vpSubmenu
         submenu.addItem(voicePromptsItem)
+        
+        // Button Action submenu
+        let buttonActionItem = NSMenuItem(title: "Button Action", action: nil, keyEquivalent: "")
+        let baSubmenu = NSMenu()
+        baSubmenu.autoenablesItems = false
+        
+        let baAlexaItem = NSMenuItem(title: "Alexa", action: #selector(setButtonActionAlexa), keyEquivalent: "")
+        baAlexaItem.target = self
+        baAlexaItem.tag = 801
+        baSubmenu.addItem(baAlexaItem)
+        
+        let baNCItem = NSMenuItem(title: "Noise Cancellation", action: #selector(setButtonActionNC), keyEquivalent: "")
+        baNCItem.target = self
+        baNCItem.tag = 802
+        baSubmenu.addItem(baNCItem)
+        
+        buttonActionItem.submenu = baSubmenu
+        submenu.addItem(buttonActionItem)
         
         submenu.addItem(NSMenuItem.separator())
         
@@ -1526,6 +1564,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             fetchDeviceStatus()
             fetchPairedDevices()
             fetchAutoOffStatus()
+            fetchButtonActionStatus()
             markDataAsFetched()
         } else {
             // Use cached data - just update the menu with what we have
@@ -1744,6 +1783,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
     }
     
+    private func fetchButtonActionStatus() {
+        let command: [UInt8] = [0x01, 0x09, 0x03, 0x04, 0x10, 0x04, 0x00, 0x07]
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x09])
+        
+        if response.count >= 5 && response[0] == 0x01 && response[1] == 0x09 && response[2] == 0x03 {
+            let buttonActionValue = response[4]
+            DispatchQueue.main.async {
+                self.updateButtonActionSelection(level: buttonActionValue)
+            }
+        }
+    }
+    
     private func getAutoOff() -> AutoOff {
         let command: [UInt8] = [0x01, 0x04, 0x01, 0x00]
         let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x04])
@@ -1783,6 +1834,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Set the appropriate checkmark
         let targetTag = Int(level) + 600
         autoOffSubmenu.item(withTag: targetTag)?.state = .on
+    }
+    
+    private func updateButtonActionSelection(level: UInt8) {
+        guard let menu = statusItem?.menu,
+              let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
+              let settingsSubmenu = settingsItem.submenu else { return }
+        
+        currentButtonAction = level
+        
+        // Find the Button Action menu item by title
+        guard let buttonActionItem = settingsSubmenu.items.first(where: { $0.title == "Button Action" }),
+              let buttonActionSubmenu = buttonActionItem.submenu else { return }
+        
+        // Clear all checkmarks
+        for item in buttonActionSubmenu.items {
+            item.state = .off
+        }
+        
+        // Set the appropriate checkmark
+        switch level {
+        case 0x01:
+            buttonActionSubmenu.item(withTag: 801)?.state = .on // Alexa
+        case 0x02:
+            buttonActionSubmenu.item(withTag: 802)?.state = .on // Noise Cancellation
+        default:
+            break
+        }
     }
     
     private func getDeviceNameForAddress(_ address: String) -> String? {
@@ -2079,6 +2157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             currentNCLevel = 0xFF
             currentSelfVoiceLevel = 0xFF
             currentAutoOffLevel = 0xFF
+            currentButtonAction = 0xFF
             pairedDevicesList = []
             lastDataFetchTime = nil // Clear cache timestamp
         }
@@ -2338,6 +2417,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     @objc private func setVoicePromptsOff() {
         setVoicePrompts(on: false)
+    }
+    
+    @objc private func setButtonActionAlexa() {
+        setButtonAction(.alexa)
+    }
+    
+    @objc private func setButtonActionNC() {
+        setButtonAction(.noiseCancellation)
+    }
+    
+    private func setButtonAction(_ action: ButtonAction) {
+        ensureConnectionAsync { [weak self] connected in
+            guard connected, let self = self else { return }
+            
+            let command: [UInt8] = [0x01, 0x09, 0x02, 0x03, 0x10, 0x04, action.rawValue]
+            self.sendCommandAsync(command) { _ in
+                DispatchQueue.main.async {
+                    self.updateButtonActionSelection(level: action.rawValue)
+                }
+            }
+        }
     }
     
     private func setVoicePrompts(on: Bool) {
