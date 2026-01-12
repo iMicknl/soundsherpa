@@ -326,6 +326,28 @@ enum SelfVoice: UInt8 {
     }
 }
 
+enum AutoOff: UInt8 {
+    case never = 0x00
+    case five = 0x05
+    case twenty = 0x14
+    case forty = 0x28
+    case sixty = 0x3C
+    case oneEighty = 0xB4
+    case unknown = 0xFF
+    
+    var displayName: String {
+        switch self {
+        case .never: return "Never"
+        case .five: return "5 minutes"
+        case .twenty: return "20 minutes"
+        case .forty: return "40 minutes"
+        case .sixty: return "60 minutes"
+        case .oneEighty: return "180 minutes"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
 // MARK: - Menu Item Tags for easy lookup
 private enum MenuTag: Int {
     case deviceHeader = 100
@@ -359,6 +381,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private let responseLock = NSLock()
     private var currentNCLevel: UInt8 = 0xFF // Unknown
     private var currentSelfVoiceLevel: UInt8 = 0xFF // Unknown
+    private var currentAutoOffLevel: UInt8 = 0xFF // Unknown
     private var pairedDevicesList: [PairedDeviceInfo] = [] // Store paired devices for menu actions
     
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -624,41 +647,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let submenu = NSMenu()
         submenu.autoenablesItems = false
         
-        // === INFO ITEMS (moved from Info submenu) ===
-        let firmwareItem = NSMenuItem(title: "Firmware: Unknown", action: nil, keyEquivalent: "")
-        firmwareItem.isEnabled = false
-        firmwareItem.tag = 401
-        submenu.addItem(firmwareItem)
+        // === SETTINGS ITEMS (at the top) ===
         
-        let codecItem = NSMenuItem(title: "Audio Codec: Unknown", action: nil, keyEquivalent: "")
-        codecItem.isEnabled = false
-        codecItem.tag = 402
-        submenu.addItem(codecItem)
+        // Auto-Off submenu
+        let autoOffItem = NSMenuItem(title: "Auto-Off", action: nil, keyEquivalent: "")
+        let autoOffSubmenu = NSMenu()
+        autoOffSubmenu.autoenablesItems = false
         
-        let deviceIdItem = NSMenuItem(title: "Device ID: Unknown", action: nil, keyEquivalent: "")
-        deviceIdItem.isEnabled = false
-        deviceIdItem.tag = 403
-        submenu.addItem(deviceIdItem)
+        let autoOffOptions: [(String, AutoOff)] = [
+            ("Never", .never),
+            ("5 minutes", .five),
+            ("20 minutes", .twenty),
+            ("40 minutes", .forty),
+            ("60 minutes", .sixty),
+            ("180 minutes", .oneEighty)
+        ]
         
-        let servicesItem = NSMenuItem(title: "Services: Unknown", action: nil, keyEquivalent: "")
-        servicesItem.isEnabled = false
-        servicesItem.tag = 404
-        submenu.addItem(servicesItem)
+        for (name, autoOff) in autoOffOptions {
+            let item = NSMenuItem(title: name, action: #selector(setAutoOff(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(autoOff.rawValue) + 600 // Offset to avoid conflicts
+            autoOffSubmenu.addItem(item)
+        }
+        autoOffItem.submenu = autoOffSubmenu
+        submenu.addItem(autoOffItem)
         
-        let serialItem = NSMenuItem(title: "Serial Number: Unknown", action: nil, keyEquivalent: "")
-        serialItem.isEnabled = false
-        serialItem.tag = 405
-        submenu.addItem(serialItem)
-        
-        submenu.addItem(NSMenuItem.separator())
-        
-        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshBattery), keyEquivalent: "r")
-        refreshItem.target = self
-        submenu.addItem(refreshItem)
-        
-        submenu.addItem(NSMenuItem.separator())
-        
-        // === SETTINGS ITEMS ===
         // Language submenu
         let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         let languageSubmenu = NSMenu()
@@ -698,6 +711,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         voicePromptsItem.submenu = vpSubmenu
         submenu.addItem(voicePromptsItem)
+        
+        submenu.addItem(NSMenuItem.separator())
+        
+        // === INFO ITEMS ===
+        let firmwareItem = NSMenuItem(title: "Firmware: Unknown", action: nil, keyEquivalent: "")
+        firmwareItem.isEnabled = false
+        firmwareItem.tag = 401
+        submenu.addItem(firmwareItem)
+        
+        let serialItem = NSMenuItem(title: "Serial Number: Unknown", action: nil, keyEquivalent: "")
+        serialItem.isEnabled = false
+        serialItem.tag = 405
+        submenu.addItem(serialItem)
+        
+        let codecItem = NSMenuItem(title: "Audio Codec: Unknown", action: nil, keyEquivalent: "")
+        codecItem.isEnabled = false
+        codecItem.tag = 402
+        submenu.addItem(codecItem)
+        
+        let deviceIdItem = NSMenuItem(title: "Device ID: Unknown", action: nil, keyEquivalent: "")
+        deviceIdItem.isEnabled = false
+        deviceIdItem.tag = 403
+        submenu.addItem(deviceIdItem)
+        
+        let servicesItem = NSMenuItem(title: "Services: Unknown", action: nil, keyEquivalent: "")
+        servicesItem.isEnabled = false
+        servicesItem.tag = 404
+        submenu.addItem(servicesItem)
+        
+        submenu.addItem(NSMenuItem.separator())
+        
+        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshBattery), keyEquivalent: "r")
+        refreshItem.target = self
+        submenu.addItem(refreshItem)
         
         return submenu
     }
@@ -1332,6 +1379,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         fetchSerialNumber()
         fetchDeviceStatus()
         fetchPairedDevices()
+        fetchAutoOffStatus()
     }
     
     private func fetchBatteryLevel() {
@@ -1523,6 +1571,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 self.updatePairedDevicesMenu(devices, totalCount: numDevicesTotal, connectedCount: numConnected)
             }
         }
+    }
+    
+    private func fetchAutoOffStatus() {
+        let command: [UInt8] = [0x01, 0x04, 0x01, 0x00]
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x04])
+        
+        if response.count >= 5 && response[0] == 0x01 && response[1] == 0x04 && response[2] == 0x03 {
+            let autoOffValue = response[4]
+            DispatchQueue.main.async {
+                self.updateAutoOffSelection(level: autoOffValue)
+            }
+        }
+    }
+    
+    private func getAutoOff() -> AutoOff {
+        let command: [UInt8] = [0x01, 0x04, 0x01, 0x00]
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x04])
+        
+        if response.count >= 5 && response[0] == 0x01 && response[1] == 0x04 && response[2] == 0x03 {
+            return AutoOff(rawValue: response[4]) ?? .unknown
+        }
+        return .unknown
+    }
+    
+    private func setAutoOffValue(_ minutes: AutoOff) -> Bool {
+        let command: [UInt8] = [0x01, 0x04, 0x02, 0x01, minutes.rawValue]
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x04])
+        
+        if response.count >= 4 && response[0] == 0x01 && response[1] == 0x04 {
+            // Verify the setting by reading it back
+            let gotMinutes = getAutoOff()
+            return gotMinutes == minutes
+        }
+        return false
+    }
+    
+    private func updateAutoOffSelection(level: UInt8) {
+        guard let menu = statusItem?.menu,
+              let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
+              let settingsSubmenu = settingsItem.submenu,
+              let autoOffItem = settingsSubmenu.items.first,
+              let autoOffSubmenu = autoOffItem.submenu else { return }
+        
+        currentAutoOffLevel = level
+        
+        // Clear all checkmarks
+        for item in autoOffSubmenu.items {
+            item.state = .off
+        }
+        
+        // Set the appropriate checkmark
+        let targetTag = Int(level) + 600
+        autoOffSubmenu.item(withTag: targetTag)?.state = .on
     }
     
     private func getDeviceNameForAddress(_ address: String) -> String? {
@@ -1874,8 +1975,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private func updateLanguageCheckmark(_ language: PromptLanguage) {
         guard let menu = statusItem?.menu,
               let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
-              let settingsSubmenu = settingsItem.submenu,
-              let languageItem = settingsSubmenu.item(at: 8),
+              let settingsSubmenu = settingsItem.submenu else { return }
+        
+        // Find the Language menu item by title
+        guard let languageItem = settingsSubmenu.items.first(where: { $0.title == "Language" }),
               let languageSubmenu = languageItem.submenu else { return }
         
         for item in languageSubmenu.items {
@@ -1886,8 +1989,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private func updateVoicePromptsCheckmark(_ on: Bool) {
         guard let menu = statusItem?.menu,
               let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
-              let settingsSubmenu = settingsItem.submenu,
-              let vpItem = settingsSubmenu.item(at: 9),
+              let settingsSubmenu = settingsItem.submenu else { return }
+        
+        // Find the Voice Prompts menu item by title
+        guard let vpItem = settingsSubmenu.items.first(where: { $0.title == "Voice Prompts" }),
               let vpSubmenu = vpItem.submenu else { return }
         
         vpSubmenu.item(withTag: 501)?.state = on ? .on : .off
@@ -1981,6 +2086,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     @objc private func setSelfVoiceHigh() {
         setSelfVoiceAsync(.high)
+    }
+    
+    @objc private func setAutoOff(_ sender: NSMenuItem) {
+        let autoOffValue = UInt8(sender.tag - 600) // Remove the offset
+        guard let autoOff = AutoOff(rawValue: autoOffValue) else { return }
+        
+        ensureConnectionAsync { [weak self] connected in
+            guard connected, let self = self else { return }
+            
+            let success = self.setAutoOffValue(autoOff)
+            DispatchQueue.main.async {
+                if success {
+                    self.updateAutoOffSelection(level: autoOffValue)
+                } else {
+                    // Revert to current setting if failed
+                    self.updateAutoOffSelection(level: self.currentAutoOffLevel)
+                }
+            }
+        }
     }
     
     private func setSelfVoiceAsync(_ level: SelfVoice) {
