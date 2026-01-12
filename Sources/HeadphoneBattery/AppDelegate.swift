@@ -12,6 +12,63 @@ struct HeadphoneInfo {
     let vendorId: String?
     let productId: String?
     let services: String?
+    let serialNumber: String?
+    let language: String?
+    let voicePromptsEnabled: Bool?
+    let selfVoiceLevel: String?
+    let pairedDevices: [String]?
+}
+
+enum PromptLanguage: UInt8 {
+    case english = 0x21
+    case french = 0x22
+    case italian = 0x23
+    case german = 0x24
+    case spanish = 0x26
+    case portuguese = 0x27
+    case chinese = 0x28
+    case korean = 0x29
+    case polish = 0x2B
+    case russian = 0x2A
+    case dutch = 0x2e
+    case japanese = 0x2f
+    case swedish = 0x32
+    case unknown = 0x00
+    
+    var displayName: String {
+        switch self {
+        case .english: return "English"
+        case .french: return "French"
+        case .italian: return "Italian"
+        case .german: return "German"
+        case .spanish: return "Spanish"
+        case .portuguese: return "Portuguese"
+        case .chinese: return "Chinese"
+        case .korean: return "Korean"
+        case .polish: return "Polish"
+        case .russian: return "Russian"
+        case .dutch: return "Dutch"
+        case .japanese: return "Japanese"
+        case .swedish: return "Swedish"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
+enum SelfVoice: UInt8 {
+    case off = 0x00
+    case high = 0x01
+    case medium = 0x02
+    case low = 0x03
+    
+    var displayName: String {
+        switch self {
+        case .off: return "Off"
+        case .high: return "High"
+        case .medium: return "Medium"
+        case .low: return "Low"
+        }
+    }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDelegate {
@@ -23,6 +80,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var rfcommChannel: IOBluetoothRFCOMMChannel?
     private var channelOpenSemaphore: DispatchSemaphore?
     private var isChannelReady = false
+    private var responseBuffer: [UInt8] = []
+    private var responseSemaphore: DispatchSemaphore?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
@@ -36,7 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Set up a more frequent timer for noise cancellation detection (every 10 seconds)
         ncUpdateTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { _ in
             if self.currentHeadphoneInfo?.isConnected == true {
-                self.detectNoiseCancellationStatus()
+                self.detectNoiseCancellationStatusAsync()
             }
         }
     }
@@ -109,6 +168,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         menu.addItem(NSMenuItem.separator())
         
+        // Serial Number
+        let serialItem = NSMenuItem(title: "Serial Number: Unknown", action: nil, keyEquivalent: "")
+        serialItem.isEnabled = false
+        menu.addItem(serialItem)
+        
+        // Language
+        let languageItem = NSMenuItem(title: "Language: Unknown", action: nil, keyEquivalent: "")
+        languageItem.isEnabled = false
+        menu.addItem(languageItem)
+        
+        // Voice Prompts
+        let voicePromptsItem = NSMenuItem(title: "Voice Prompts: Unknown", action: nil, keyEquivalent: "")
+        voicePromptsItem.isEnabled = false
+        menu.addItem(voicePromptsItem)
+        
+        // Self Voice
+        let selfVoiceItem = NSMenuItem(title: "Self Voice: Unknown", action: nil, keyEquivalent: "")
+        selfVoiceItem.isEnabled = false
+        menu.addItem(selfVoiceItem)
+        
+        // Paired Devices
+        let pairedDevicesItem = NSMenuItem(title: "Paired Devices: Unknown", action: nil, keyEquivalent: "")
+        pairedDevicesItem.isEnabled = false
+        menu.addItem(pairedDevicesItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
         // Connection status
         let connectionItem = NSMenuItem(title: "Status: Checking...", action: nil, keyEquivalent: "")
         connectionItem.isEnabled = false
@@ -134,6 +220,69 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         ncControlItem.submenu = ncSubmenu
         menu.addItem(ncControlItem)
         
+        // Language Control submenu
+        let languageControlItem = NSMenuItem(title: "Set Language", action: nil, keyEquivalent: "")
+        let languageSubmenu = NSMenu()
+        languageSubmenu.autoenablesItems = false
+        
+        let languages: [(String, PromptLanguage)] = [
+            ("English", .english), ("French", .french), ("Italian", .italian),
+            ("German", .german), ("Spanish", .spanish), ("Portuguese", .portuguese),
+            ("Chinese", .chinese), ("Korean", .korean), ("Polish", .polish),
+            ("Russian", .russian), ("Dutch", .dutch), ("Japanese", .japanese),
+            ("Swedish", .swedish)
+        ]
+        
+        for (name, lang) in languages {
+            let item = NSMenuItem(title: name, action: #selector(setLanguage(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(lang.rawValue)
+            languageSubmenu.addItem(item)
+        }
+        languageControlItem.submenu = languageSubmenu
+        menu.addItem(languageControlItem)
+        
+        // Voice Prompts Toggle
+        let voicePromptsControlItem = NSMenuItem(title: "Set Voice Prompts", action: nil, keyEquivalent: "")
+        let voicePromptsSubmenu = NSMenu()
+        voicePromptsSubmenu.autoenablesItems = false
+        
+        let vpOnItem = NSMenuItem(title: "On", action: #selector(setVoicePromptsOn), keyEquivalent: "")
+        vpOnItem.target = self
+        let vpOffItem = NSMenuItem(title: "Off", action: #selector(setVoicePromptsOff), keyEquivalent: "")
+        vpOffItem.target = self
+        
+        voicePromptsSubmenu.addItem(vpOnItem)
+        voicePromptsSubmenu.addItem(vpOffItem)
+        voicePromptsControlItem.submenu = voicePromptsSubmenu
+        menu.addItem(voicePromptsControlItem)
+        
+        // Self Voice Control submenu
+        let selfVoiceControlItem = NSMenuItem(title: "Set Self Voice", action: nil, keyEquivalent: "")
+        let selfVoiceSubmenu = NSMenu()
+        selfVoiceSubmenu.autoenablesItems = false
+        
+        let svOffItem = NSMenuItem(title: "Off", action: #selector(setSelfVoiceOff), keyEquivalent: "")
+        svOffItem.target = self
+        let svLowItem = NSMenuItem(title: "Low", action: #selector(setSelfVoiceLow), keyEquivalent: "")
+        svLowItem.target = self
+        let svMediumItem = NSMenuItem(title: "Medium", action: #selector(setSelfVoiceMedium), keyEquivalent: "")
+        svMediumItem.target = self
+        let svHighItem = NSMenuItem(title: "High", action: #selector(setSelfVoiceHigh), keyEquivalent: "")
+        svHighItem.target = self
+        
+        selfVoiceSubmenu.addItem(svOffItem)
+        selfVoiceSubmenu.addItem(svLowItem)
+        selfVoiceSubmenu.addItem(svMediumItem)
+        selfVoiceSubmenu.addItem(svHighItem)
+        selfVoiceControlItem.submenu = selfVoiceSubmenu
+        menu.addItem(selfVoiceControlItem)
+        
+        // Disconnect Device
+        let disconnectItem = NSMenuItem(title: "Disconnect Device", action: #selector(disconnectDevice), keyEquivalent: "")
+        disconnectItem.target = self
+        menu.addItem(disconnectItem)
+        
         menu.addItem(NSMenuItem.separator())
         
         // Refresh item
@@ -154,49 +303,78 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private func checkForBoseDevices() {
         print("Checking for Bose devices...")
         
-        let task = Process()
-        task.launchPath = "/usr/sbin/system_profiler"
-        task.arguments = ["SPBluetoothDataType"]
-        
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        
-        do {
-            try task.run()
-            task.waitUntilExit()
+        // Run system_profiler in background to not block UI
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let task = Process()
+            task.launchPath = "/usr/sbin/system_profiler"
+            task.arguments = ["SPBluetoothDataType"]
             
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8) {
-                parseBoseInfoFromSystemProfiler(output)
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
                 
-                // Try to detect noise cancellation status
-                detectNoiseCancellationStatus()
-            } else {
-                print("Failed to get system profiler output")
-                updateMenuWithNoDevice()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let output = String(data: data, encoding: .utf8) {
+                    DispatchQueue.main.async {
+                        self?.parseBoseInfoFromSystemProfiler(output)
+                    }
+                    
+                    // Try to detect noise cancellation status in background
+                    self?.detectNoiseCancellationStatusAsync()
+                } else {
+                    print("Failed to get system profiler output")
+                    DispatchQueue.main.async {
+                        self?.updateMenuWithNoDevice()
+                    }
+                }
+            } catch {
+                print("Error running system_profiler: \(error)")
+                DispatchQueue.main.async {
+                    self?.updateMenuWithNoDevice()
+                }
             }
-        } catch {
-            print("Error running system_profiler: \(error)")
-            updateMenuWithNoDevice()
         }
     }
     
-    private func detectNoiseCancellationStatus() {
+    private func detectNoiseCancellationStatusAsync() {
         guard let deviceAddr = deviceAddress else {
             print("No device address available for NC detection")
             return
         }
         
-        // Connect to Bose device using SPP Dev service
-        if connectToBoseDevice(address: deviceAddr) {
-            // Send command to get NC status
-            sendGetNoiseCancellationCommand()
-        } else {
-            updateNoiseCancellationStatus("Unknown (Connection Failed)")
+        // Connect and fetch all device info in background
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
+            print(">>> Starting connection to device: \(deviceAddr)")
+            
+            if self.connectToBoseDeviceSync(address: deviceAddr) {
+                print(">>> Connection successful, initializing Bose protocol...")
+                
+                // Initialize connection with Bose protocol
+                if self.initBoseConnection() {
+                    print(">>> Init successful, fetching device info...")
+                    // Fetch all device info
+                    self.fetchAllDeviceInfo()
+                } else {
+                    print(">>> Init failed, trying to fetch without init...")
+                    // Try fetching anyway - some devices might not need init
+                    self.fetchAllDeviceInfo()
+                }
+            } else {
+                print(">>> Connection failed")
+                DispatchQueue.main.async {
+                    self.updateNoiseCancellationStatus("Unknown")
+                }
+            }
         }
     }
     
-    private func connectToBoseDevice(address: String) -> Bool {
+    // Synchronous connection - must be called from background thread
+    private func connectToBoseDeviceSync(address: String) -> Bool {
         // Find the device by address
         guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
             print("No paired devices found")
@@ -330,6 +508,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         print("Sync open failed: \(krToString(openResult))")
         
+        // Try async with semaphore first before trying other channels
+        print("Trying async channel open on channel \(channelId)...")
+        channelOpenSemaphore = DispatchSemaphore(value: 0)
+        
+        let asyncResult = device.openRFCOMMChannelAsync(&channel,
+                                                       withChannelID: channelId,
+                                                       delegate: self)
+        if asyncResult == kIOReturnSuccess {
+            self.rfcommChannel = channel
+            
+            // Wait for channel to open (max 10 seconds)
+            let waitResult = channelOpenSemaphore?.wait(timeout: .now() + 10.0)
+            channelOpenSemaphore = nil
+            
+            if waitResult != .timedOut && isChannelReady && (rfcommChannel?.isOpen() ?? false) {
+                print("Async channel open succeeded")
+                return true
+            }
+        } else {
+            print("Async open failed: \(krToString(asyncResult))")
+            channelOpenSemaphore = nil
+        }
+        
         // Second try: Try different channel IDs (8 and 9 are common for Bose)
         let channelIdsToTry: [BluetoothRFCOMMChannelID] = [8, 9, 1, 2, 3]
         for tryChannelId in channelIdsToTry {
@@ -350,33 +551,308 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             print("Channel \(tryChannelId) failed: \(krToString(openResult))")
         }
         
-        // Third try: async with semaphore
-        print("Trying async channel open on original channel \(channelId)...")
-        channelOpenSemaphore = DispatchSemaphore(value: 0)
-        
-        let asyncResult = device.openRFCOMMChannelAsync(&channel,
-                                                       withChannelID: channelId,
-                                                       delegate: self)
-        if asyncResult != kIOReturnSuccess {
-            print("Async open failed: \(krToString(asyncResult))")
-            channelOpenSemaphore = nil
+        print("All channel open attempts failed")
+        print("Note: This may require Bluetooth permissions in System Preferences > Security & Privacy > Privacy > Bluetooth")
+        return false
+    }
+    
+    // MARK: - Bose Protocol Init
+    
+    private func initBoseConnection() -> Bool {
+        guard let channel = rfcommChannel, channel.isOpen() else {
+            print("Cannot init: channel not open")
             return false
         }
         
-        self.rfcommChannel = channel
+        // Send INIT_CONNECTION: [0x00, 0x01, 0x01, 0x00]
+        // Expected ACK: [0x00, 0x01, 0x03, 0x05]
+        let initCommand: [UInt8] = [0x00, 0x01, 0x01, 0x00]
         
-        // Wait for channel to open (max 5 seconds)
-        let waitResult = channelOpenSemaphore?.wait(timeout: .now() + 5.0)
-        channelOpenSemaphore = nil
+        responseBuffer = []
+        responseSemaphore = DispatchSemaphore(value: 0)
+        
+        var data = initCommand
+        var result: [UInt8] = []
+        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        if writeResult != kIOReturnSuccess {
+            print("Failed to send init command: \(krToString(writeResult))")
+            responseSemaphore = nil
+            return false
+        }
+        
+        print(">>> Sent INIT command: \(initCommand.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        
+        // Wait for response - give it more time
+        let waitResult = responseSemaphore?.wait(timeout: .now() + 5.0)
+        responseSemaphore = nil
         
         if waitResult == .timedOut {
-            print("Timeout waiting for channel to open")
-            return false
+            print(">>> Timeout waiting for init response")
+            // Continue anyway - might still work
+            return true
         }
         
-        let success = isChannelReady && (rfcommChannel?.isOpen() ?? false)
-        print("Async channel open result: \(success), isOpen: \(rfcommChannel?.isOpen() ?? false)")
-        return success
+        print(">>> Init response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        
+        // Check ACK - be more lenient
+        if responseBuffer.count >= 4 && responseBuffer[0] == 0x00 && responseBuffer[1] == 0x01 {
+            print(">>> Init connection successful")
+            return true
+        }
+        
+        // Even if response doesn't match, continue
+        print(">>> Init response unexpected, but continuing...")
+        return true
+    }
+    
+    // MARK: - Fetch All Device Info
+    
+    private func fetchAllDeviceInfo() {
+        // Get battery level
+        fetchBatteryLevel()
+        
+        // Small delay between commands
+        Thread.sleep(forTimeInterval: 0.1)
+        
+        // Get serial number
+        fetchSerialNumber()
+        
+        Thread.sleep(forTimeInterval: 0.1)
+        
+        // Get device status (includes NC, language, etc.)
+        fetchDeviceStatus()
+        
+        Thread.sleep(forTimeInterval: 0.1)
+        
+        // Get paired devices
+        fetchPairedDevices()
+    }
+    
+    private func fetchBatteryLevel() {
+        guard let channel = rfcommChannel, channel.isOpen() else { return }
+        
+        // GET_BATTERY_LEVEL_SEND: [0x02, 0x02, 0x01, 0x00]
+        let command: [UInt8] = [0x02, 0x02, 0x01, 0x00]
+        
+        responseBuffer = []
+        responseSemaphore = DispatchSemaphore(value: 0)
+        
+        var data = command
+        var result: [UInt8] = []
+        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        if writeResult != kIOReturnSuccess {
+            print("Failed to send battery command")
+            responseSemaphore = nil
+            return
+        }
+        
+        print("Sent battery command")
+        
+        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
+        responseSemaphore = nil
+        
+        // Expected: [0x02, 0x02, 0x03, 0x01, level]
+        if responseBuffer.count >= 5 && responseBuffer[0] == 0x02 && responseBuffer[1] == 0x02 && responseBuffer[2] == 0x03 {
+            let level = Int(responseBuffer[4])
+            print("Battery level: \(level)%")
+            DispatchQueue.main.async {
+                self.updateBatteryInMenu(level)
+            }
+        } else {
+            print("Unexpected battery response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        }
+    }
+    
+    private func fetchSerialNumber() {
+        guard let channel = rfcommChannel, channel.isOpen() else { return }
+        
+        // GET_SERIAL_NUMBER_SEND: [0x00, 0x07, 0x01, 0x00]
+        let command: [UInt8] = [0x00, 0x07, 0x01, 0x00]
+        
+        responseBuffer = []
+        responseSemaphore = DispatchSemaphore(value: 0)
+        
+        var data = command
+        var result: [UInt8] = []
+        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        if writeResult != kIOReturnSuccess {
+            print("Failed to send serial command")
+            responseSemaphore = nil
+            return
+        }
+        
+        print("Sent serial command")
+        
+        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
+        responseSemaphore = nil
+        
+        // Expected: [0x00, 0x07, 0x03, length, ...serial...]
+        if responseBuffer.count >= 4 && responseBuffer[0] == 0x00 && responseBuffer[1] == 0x07 && responseBuffer[2] == 0x03 {
+            let length = Int(responseBuffer[3])
+            if responseBuffer.count >= 4 + length {
+                let serialBytes = Array(responseBuffer[4..<(4 + length)])
+                if let serial = String(bytes: serialBytes, encoding: .utf8) {
+                    print("Serial number: \(serial)")
+                    DispatchQueue.main.async {
+                        self.updateSerialInMenu(serial)
+                    }
+                }
+            }
+        } else {
+            print("Unexpected serial response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        }
+    }
+    
+    private func fetchDeviceStatus() {
+        guard let channel = rfcommChannel, channel.isOpen() else { return }
+        
+        // First get device ID
+        let deviceIdCommand: [UInt8] = [0x00, 0x03, 0x01, 0x00]
+        
+        responseBuffer = []
+        responseSemaphore = DispatchSemaphore(value: 0)
+        
+        var data = deviceIdCommand
+        var result: [UInt8] = []
+        var writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        if writeResult != kIOReturnSuccess {
+            print("Failed to send device ID command")
+            responseSemaphore = nil
+            return
+        }
+        
+        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
+        responseSemaphore = nil
+        
+        Thread.sleep(forTimeInterval: 0.1)
+        
+        // GET_DEVICE_STATUS_SEND: [0x01, 0x01, 0x05, 0x00]
+        let statusCommand: [UInt8] = [0x01, 0x01, 0x05, 0x00]
+        
+        responseBuffer = []
+        responseSemaphore = DispatchSemaphore(value: 0)
+        
+        data = statusCommand
+        writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        if writeResult != kIOReturnSuccess {
+            print("Failed to send status command")
+            responseSemaphore = nil
+            return
+        }
+        
+        print("Sent device status command")
+        
+        // Wait for first response
+        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
+        
+        // Wait for additional responses (device status comes in multiple packets)
+        for _ in 0..<5 {
+            responseSemaphore = DispatchSemaphore(value: 0)
+            let result = responseSemaphore?.wait(timeout: .now() + 0.5)
+            if result == .timedOut {
+                break
+            }
+        }
+        responseSemaphore = nil
+        
+        print("Device status response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        
+        // Parse the response - it contains name, language, auto-off, NC level
+        parseDeviceStatusResponse()
+    }
+    
+    private func parseDeviceStatusResponse() {
+        // The device status response is complex and contains multiple parts
+        // We need to parse: name, language (with voice prompts bit), auto-off, NC level
+        
+        // Skip initial ACK bytes [0x01, 0x01, 0x07, 0x00]
+        // Look for language response: [0x01, 0x03, 0x03, 0x05, language, 0x00, ?, ?, 0xde]
+        for i in 0..<responseBuffer.count {
+            if i + 4 < responseBuffer.count && responseBuffer[i] == 0x01 && responseBuffer[i+1] == 0x03 && responseBuffer[i+2] == 0x03 {
+                let langByte = responseBuffer[i+4]
+                let voicePromptsOn = (langByte & 0x80) != 0
+                let langValue = langByte & 0x7F
+                
+                currentLanguageValue = langByte
+                
+                if let lang = PromptLanguage(rawValue: langValue) {
+                    DispatchQueue.main.async {
+                        self.updateLanguageInMenu(lang.displayName)
+                        self.updateVoicePromptsInMenu(voicePromptsOn)
+                    }
+                }
+                break
+            }
+        }
+        
+        // Look for NC response: [0x01, 0x06, 0x03, 0x02, level, 0x0b]
+        for i in 0..<responseBuffer.count {
+            if i + 4 < responseBuffer.count && responseBuffer[i] == 0x01 && responseBuffer[i+1] == 0x06 && responseBuffer[i+2] == 0x03 {
+                let ncLevel = responseBuffer[i+4]
+                let statusText: String
+                switch ncLevel {
+                case 0x00: statusText = "Off"
+                case 0x01: statusText = "High"
+                case 0x03: statusText = "Low"
+                default: statusText = "Level \(ncLevel)"
+                }
+                DispatchQueue.main.async {
+                    self.updateMenuWithNCStatus(statusText)
+                }
+                break
+            }
+        }
+    }
+    
+    private func fetchPairedDevices() {
+        guard let channel = rfcommChannel, channel.isOpen() else { return }
+        
+        // GET_PAIRED_DEVICES_SEND: [0x04, 0x04, 0x01, 0x00]
+        let command: [UInt8] = [0x04, 0x04, 0x01, 0x00]
+        
+        responseBuffer = []
+        responseSemaphore = DispatchSemaphore(value: 0)
+        
+        var data = command
+        var result: [UInt8] = []
+        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+        if writeResult != kIOReturnSuccess {
+            print("Failed to send paired devices command")
+            responseSemaphore = nil
+            return
+        }
+        
+        print("Sent paired devices command")
+        
+        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
+        responseSemaphore = nil
+        
+        // Expected: [0x04, 0x04, 0x03, numDevices*6, numConnected, ...addresses...]
+        if responseBuffer.count >= 5 && responseBuffer[0] == 0x04 && responseBuffer[1] == 0x04 && responseBuffer[2] == 0x03 {
+            let numDevicesBytes = Int(responseBuffer[3])
+            let numDevices = numDevicesBytes / 6
+            let numConnected = Int(responseBuffer[4])
+            
+            print("Paired devices: \(numDevices), connected: \(numConnected)")
+            
+            var devices: [String] = []
+            var offset = 5
+            for i in 0..<numDevices {
+                if offset + 6 <= responseBuffer.count {
+                    let addressBytes = Array(responseBuffer[offset..<(offset + 6)])
+                    let address = addressBytes.map { String(format: "%02X", $0) }.joined(separator: ":")
+                    let status = i < numConnected ? " (Connected)" : ""
+                    devices.append(address + status)
+                    offset += 6
+                }
+            }
+            
+            DispatchQueue.main.async {
+                self.updatePairedDevicesInMenu(devices)
+            }
+        } else {
+            print("Unexpected paired devices response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        }
     }
     
     @objc func newRFCOMMChannelOpened(userNotification: IOBluetoothUserNotification, channel: IOBluetoothRFCOMMChannel) {
@@ -418,6 +894,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
         
         print(">>> RECEIVED \(dataLength) bytes: \(responseData.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+        
+        // Store response for synchronous commands
+        responseBuffer.append(contentsOf: responseData)
+        responseSemaphore?.signal()
         
         // Parse the response for NC status
         // Bose response formats:
@@ -509,7 +989,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             audioCodec: info.audioCodec,
             vendorId: info.vendorId,
             productId: info.productId,
-            services: info.services
+            services: info.services,
+            serialNumber: info.serialNumber,
+            language: info.language,
+            voicePromptsEnabled: info.voicePromptsEnabled,
+            selfVoiceLevel: info.selfVoiceLevel,
+            pairedDevices: info.pairedDevices
         )
         
         currentHeadphoneInfo = updatedInfo
@@ -555,7 +1040,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             audioCodec: nil,
             vendorId: nil,
             productId: nil,
-            services: nil
+            services: nil,
+            serialNumber: nil,
+            language: nil,
+            voicePromptsEnabled: nil,
+            selfVoiceLevel: nil,
+            pairedDevices: nil
         )
         updateMenuWithHeadphoneInfo(info)
     }
@@ -684,7 +1174,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                         audioCodec: determineAudioCodec(from: services),
                         vendorId: vendorId,
                         productId: productId,
-                        services: services
+                        services: services,
+                        serialNumber: nil,
+                        language: nil,
+                        voicePromptsEnabled: nil,
+                        selfVoiceLevel: nil,
+                        pairedDevices: nil
                     )
                     
                     DispatchQueue.main.async {
@@ -721,7 +1216,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 audioCodec: determineAudioCodec(from: services),
                 vendorId: vendorId,
                 productId: productId,
-                services: services
+                services: services,
+                serialNumber: nil,
+                language: nil,
+                voicePromptsEnabled: nil,
+                selfVoiceLevel: nil,
+                pairedDevices: nil
             )
             
             DispatchQueue.main.async {
@@ -799,8 +1299,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             servicesItem.title = "Services: \(info.services ?? "Unknown")"
         }
         
-        // Update connection status (index 9)
-        if let connectionItem = menu.item(at: 9) {
+        // Update serial number (index 9)
+        if let serialItem = menu.item(at: 9) {
+            serialItem.title = "Serial Number: \(info.serialNumber ?? "Unknown")"
+        }
+        
+        // Update language (index 10)
+        if let languageItem = menu.item(at: 10) {
+            languageItem.title = "Language: \(info.language ?? "Unknown")"
+        }
+        
+        // Update voice prompts (index 11)
+        if let voicePromptsItem = menu.item(at: 11) {
+            if let enabled = info.voicePromptsEnabled {
+                voicePromptsItem.title = "Voice Prompts: \(enabled ? "On" : "Off")"
+            } else {
+                voicePromptsItem.title = "Voice Prompts: Unknown"
+            }
+        }
+        
+        // Update self voice (index 12)
+        if let selfVoiceItem = menu.item(at: 12) {
+            selfVoiceItem.title = "Self Voice: \(info.selfVoiceLevel ?? "Unknown")"
+        }
+        
+        // Update paired devices (index 13)
+        if let pairedDevicesItem = menu.item(at: 13) {
+            if let devices = info.pairedDevices, !devices.isEmpty {
+                pairedDevicesItem.title = "Paired Devices: \(devices.count)"
+            } else {
+                pairedDevicesItem.title = "Paired Devices: Unknown"
+            }
+        }
+        
+        // Update connection status (index 15)
+        if let connectionItem = menu.item(at: 15) {
             connectionItem.title = "Status: \(info.isConnected ? "Connected" : "Disconnected")"
         }
         
@@ -821,7 +1354,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     @objc private func refreshBattery() {
-        // Manually refresh the device info
+        // Manually refresh the device info - runs in background
         checkForBoseDevices()
     }
     
@@ -841,45 +1374,32 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func sendNoiseCancellationCommand(level: UInt8) {
-        // Ensure we have a connection
-        if rfcommChannel == nil || !(rfcommChannel?.isOpen() ?? false) {
-            print("RFCOMM channel not open, attempting to connect...")
-            if let deviceAddr = deviceAddress {
-                if !connectToBoseDevice(address: deviceAddr) {
-                    print("Failed to connect to Bose device")
-                    return
-                }
-            } else {
-                print("No device address available")
+        ensureConnectionAsync { [weak self] connected in
+            guard connected, let self = self else {
+                print("Cannot set NC: not connected")
                 return
             }
-        }
-        
-        guard let channel = rfcommChannel, channel.isOpen() else {
-            print("RFCOMM channel is not open after connection attempt")
-            return
-        }
-        
-        // Bose NC command format: [0x01, 0x06, 0x02, 0x01, level]
-        // level: 0x00 = Off, 0x01 = High, 0x03 = Medium
-        var data: [UInt8] = [0x01, 0x06, 0x02, 0x01, level]
-        var result: [UInt8] = []
-        
-        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            print("Failed to send NC command: \(krToString(writeResult))")
-        } else {
-            print("NC command sent successfully")
-            // Update the menu to reflect the change
-            let statusText: String
-            switch level {
-            case 0x00: statusText = "Off"
-            case 0x01: statusText = "High"
-            case 0x03: statusText = "Low"
-            default: statusText = "Unknown"
-            }
-            DispatchQueue.main.async {
-                self.updateMenuWithNCStatus(statusText)
+            
+            // Bose NC command format: [0x01, 0x06, 0x02, 0x01, level]
+            // level: 0x00 = Off, 0x01 = High, 0x03 = Low
+            let command: [UInt8] = [0x01, 0x06, 0x02, 0x01, level]
+            
+            self.sendCommandAsync(command) { response in
+                if let response = response {
+                    print("NC command response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+                }
+                
+                // Update the menu to reflect the change
+                let statusText: String
+                switch level {
+                case 0x00: statusText = "Off"
+                case 0x01: statusText = "High"
+                case 0x03: statusText = "Low"
+                default: statusText = "Unknown"
+                }
+                DispatchQueue.main.async {
+                    self.updateMenuWithNCStatus(statusText)
+                }
             }
         }
     }
@@ -889,6 +1409,264 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             return String(cString: cStr)
         } else {
             return "Unknown kernel error \(kr)"
+        }
+    }
+    
+    // MARK: - Bluetooth Command Methods
+    
+    private func sendCommandAsync(_ command: [UInt8], completion: @escaping ([UInt8]?) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                completion(nil)
+                return
+            }
+            
+            guard let channel = self.rfcommChannel, channel.isOpen() else {
+                print("RFCOMM channel is not open")
+                completion(nil)
+                return
+            }
+            
+            self.responseBuffer = []
+            self.responseSemaphore = DispatchSemaphore(value: 0)
+            
+            var data = command
+            var result: [UInt8] = []
+            let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
+            if writeResult != kIOReturnSuccess {
+                print("Failed to write command: \(self.krToString(writeResult))")
+                self.responseSemaphore = nil
+                completion(nil)
+                return
+            }
+            
+            print("Sent command: \(command.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+            
+            let waitResult = self.responseSemaphore?.wait(timeout: .now() + 2.0)
+            self.responseSemaphore = nil
+            
+            if waitResult == .timedOut {
+                print("Timeout waiting for response")
+                completion(nil)
+                return
+            }
+            
+            completion(self.responseBuffer.isEmpty ? nil : self.responseBuffer)
+        }
+    }
+    
+    private func ensureConnectionAsync(completion: @escaping (Bool) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                completion(false)
+                return
+            }
+            
+            if self.rfcommChannel == nil || !(self.rfcommChannel?.isOpen() ?? false) {
+                print("RFCOMM channel not open, attempting to connect...")
+                if let deviceAddr = self.deviceAddress {
+                    let result = self.connectToBoseDeviceSync(address: deviceAddr)
+                    completion(result)
+                } else {
+                    print("No device address available")
+                    completion(false)
+                }
+            } else {
+                completion(true)
+            }
+        }
+    }
+    
+    // MARK: - Battery Level (used by menu actions)
+    
+    // MARK: - Serial Number (used by menu actions)
+    
+    // MARK: - Language
+    
+    @objc private func setLanguage(_ sender: NSMenuItem) {
+        let languageValue = UInt8(sender.tag)
+        
+        ensureConnectionAsync { [weak self] connected in
+            guard connected, let self = self else {
+                print("Cannot set language: not connected")
+                return
+            }
+            
+            let command: [UInt8] = [0x01, 0x03, 0x02, 0x01, languageValue]
+            self.sendCommandAsync(command) { response in
+                if let response = response {
+                    print("Language set response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+                }
+                
+                DispatchQueue.main.async {
+                    if let lang = PromptLanguage(rawValue: languageValue) {
+                        self.updateLanguageInMenu(lang.displayName)
+                    }
+                }
+            }
+        }
+    }
+    
+    private func updateLanguageInMenu(_ language: String) {
+        guard let menu = statusItem?.menu else { return }
+        if let languageItem = menu.item(at: 10) {
+            languageItem.title = "Language: \(language)"
+        }
+    }
+    
+    // MARK: - Voice Prompts
+    
+    private var currentLanguageValue: UInt8 = 0x21 // Default to English
+    
+    @objc private func setVoicePromptsOn() {
+        setVoicePrompts(on: true)
+    }
+    
+    @objc private func setVoicePromptsOff() {
+        setVoicePrompts(on: false)
+    }
+    
+    private func setVoicePrompts(on: Bool) {
+        ensureConnectionAsync { [weak self] connected in
+            guard connected, let self = self else {
+                print("Cannot set voice prompts: not connected")
+                return
+            }
+            
+            // Voice prompts are controlled via language setting with VP_MASK (0x80)
+            var languageValue = self.currentLanguageValue & 0x7F // Clear VP bit
+            if on {
+                languageValue |= 0x80 // Set VP bit
+            }
+            
+            let command: [UInt8] = [0x01, 0x03, 0x02, 0x01, languageValue]
+            self.sendCommandAsync(command) { response in
+                if let response = response {
+                    print("Voice prompts set response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+                }
+                
+                DispatchQueue.main.async {
+                    self.updateVoicePromptsInMenu(on)
+                }
+            }
+        }
+    }
+    
+    private func updateVoicePromptsInMenu(_ on: Bool) {
+        guard let menu = statusItem?.menu else { return }
+        if let voicePromptsItem = menu.item(at: 11) {
+            voicePromptsItem.title = "Voice Prompts: \(on ? "On" : "Off")"
+        }
+    }
+    
+    // MARK: - Self Voice
+    
+    @objc private func setSelfVoiceOff() {
+        setSelfVoiceAsync(.off)
+    }
+    
+    @objc private func setSelfVoiceLow() {
+        setSelfVoiceAsync(.low)
+    }
+    
+    @objc private func setSelfVoiceMedium() {
+        setSelfVoiceAsync(.medium)
+    }
+    
+    @objc private func setSelfVoiceHigh() {
+        setSelfVoiceAsync(.high)
+    }
+    
+    private func setSelfVoiceAsync(_ level: SelfVoice) {
+        ensureConnectionAsync { [weak self] connected in
+            guard connected, let self = self else {
+                print("Cannot set self voice: not connected")
+                return
+            }
+            
+            let command: [UInt8] = [0x01, 0x0b, 0x02, 0x02, 0x01, level.rawValue, 0x38]
+            self.sendCommandAsync(command) { response in
+                if let response = response {
+                    print("Self voice set response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+                }
+                
+                DispatchQueue.main.async {
+                    self.updateSelfVoiceInMenu(level.displayName)
+                }
+            }
+        }
+    }
+    
+    private func updateSelfVoiceInMenu(_ level: String) {
+        guard let menu = statusItem?.menu else { return }
+        if let selfVoiceItem = menu.item(at: 12) {
+            selfVoiceItem.title = "Self Voice: \(level)"
+        }
+    }
+    
+    // MARK: - Paired Devices (used by menu actions)
+    
+    // MARK: - Disconnect Device
+    
+    @objc private func disconnectDevice() {
+        guard let deviceAddr = deviceAddress else {
+            print("No device address to disconnect")
+            return
+        }
+        
+        ensureConnectionAsync { [weak self] connected in
+            guard connected, let self = self else {
+                print("Cannot disconnect: not connected")
+                return
+            }
+            
+            // Convert address string to bytes
+            let addressComponents = deviceAddr.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "")
+            var addressBytes: [UInt8] = []
+            
+            var index = addressComponents.startIndex
+            while index < addressComponents.endIndex {
+                let nextIndex = addressComponents.index(index, offsetBy: 2, limitedBy: addressComponents.endIndex) ?? addressComponents.endIndex
+                if let byte = UInt8(addressComponents[index..<nextIndex], radix: 16) {
+                    addressBytes.append(byte)
+                }
+                index = nextIndex
+            }
+            
+            if addressBytes.count == 6 {
+                var command: [UInt8] = [0x04, 0x02, 0x05, 0x06]
+                command.append(contentsOf: addressBytes)
+                
+                self.sendCommandAsync(command) { response in
+                    if let response = response {
+                        print("Disconnect response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Enhanced Device Info Fetching
+    
+    private func updateBatteryInMenu(_ level: Int) {
+        guard let menu = statusItem?.menu else { return }
+        if let batteryItem = menu.item(at: 2) {
+            batteryItem.title = "Battery: \(level)%"
+            updateStatusBarIcon(batteryLevel: level)
+        }
+    }
+    
+    private func updateSerialInMenu(_ serial: String) {
+        guard let menu = statusItem?.menu else { return }
+        if let serialItem = menu.item(at: 9) {
+            serialItem.title = "Serial Number: \(serial)"
+        }
+    }
+    
+    private func updatePairedDevicesInMenu(_ devices: [String]) {
+        guard let menu = statusItem?.menu else { return }
+        if let pairedDevicesItem = menu.item(at: 13) {
+            pairedDevicesItem.title = "Paired Devices: \(devices.count)"
         }
     }
     
