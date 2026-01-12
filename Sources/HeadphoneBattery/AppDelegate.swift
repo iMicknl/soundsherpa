@@ -2165,7 +2165,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Update device header with name, battery, and connection status
         updateDeviceHeader(name: info.name, battery: info.batteryLevel, isConnected: info.isConnected)
         
-        // Update menu items visibility based on connection state
+        // Always show full menu immediately when connected - data will populate progressively
         updateMenuItemsVisibility(isConnected: info.isConnected)
         
         // Update status bar icon
