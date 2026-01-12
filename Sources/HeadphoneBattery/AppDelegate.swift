@@ -164,38 +164,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         menu.addItem(NSMenuItem.separator())
         
         // === NOISE CANCELLATION (Listening Mode style) ===
-        let ncHeaderItem = NSMenuItem(title: "Noise Cancellation", action: nil, keyEquivalent: "")
+        let ncHeaderItem = createSectionHeader(title: "Noise Cancellation")
         ncHeaderItem.tag = MenuTag.noiseCancellationHeader.rawValue
-        ncHeaderItem.isEnabled = false
         menu.addItem(ncHeaderItem)
         
-        let ncOffItem = createNCMenuItem(title: "Off", action: #selector(setNoiseCancellationOff), tag: MenuTag.ncOff.rawValue)
+        let ncOffItem = createNCMenuItem(title: "Off", action: #selector(setNoiseCancellationOff), tag: MenuTag.ncOff.rawValue, iconName: "speaker.wave.1")
         menu.addItem(ncOffItem)
         
-        let ncLowItem = createNCMenuItem(title: "Low", action: #selector(setNoiseCancellationLow), tag: MenuTag.ncLow.rawValue)
+        let ncLowItem = createNCMenuItem(title: "Low", action: #selector(setNoiseCancellationLow), tag: MenuTag.ncLow.rawValue, iconName: "speaker.wave.2")
         menu.addItem(ncLowItem)
         
-        let ncHighItem = createNCMenuItem(title: "High", action: #selector(setNoiseCancellationHigh), tag: MenuTag.ncHigh.rawValue)
+        let ncHighItem = createNCMenuItem(title: "High", action: #selector(setNoiseCancellationHigh), tag: MenuTag.ncHigh.rawValue, iconName: "speaker.wave.3")
         menu.addItem(ncHighItem)
         
         menu.addItem(NSMenuItem.separator())
         
         // === SELF VOICE (Listening Mode style) ===
-        let svHeaderItem = NSMenuItem(title: "Self Voice", action: nil, keyEquivalent: "")
+        let svHeaderItem = createSectionHeader(title: "Self Voice")
         svHeaderItem.tag = MenuTag.selfVoiceHeader.rawValue
-        svHeaderItem.isEnabled = false
         menu.addItem(svHeaderItem)
         
-        let svOffItem = createSelfVoiceMenuItem(title: "Off", action: #selector(setSelfVoiceOff), tag: MenuTag.svOff.rawValue)
+        let svOffItem = createSelfVoiceMenuItem(title: "Off", action: #selector(setSelfVoiceOff), tag: MenuTag.svOff.rawValue, iconName: "person")
         menu.addItem(svOffItem)
         
-        let svLowItem = createSelfVoiceMenuItem(title: "Low", action: #selector(setSelfVoiceLow), tag: MenuTag.svLow.rawValue)
+        let svLowItem = createSelfVoiceMenuItem(title: "Low", action: #selector(setSelfVoiceLow), tag: MenuTag.svLow.rawValue, iconName: "person.wave.2")
         menu.addItem(svLowItem)
         
-        let svMediumItem = createSelfVoiceMenuItem(title: "Medium", action: #selector(setSelfVoiceMedium), tag: MenuTag.svMedium.rawValue)
+        let svMediumItem = createSelfVoiceMenuItem(title: "Medium", action: #selector(setSelfVoiceMedium), tag: MenuTag.svMedium.rawValue, iconName: "person.wave.2.fill")
         menu.addItem(svMediumItem)
         
-        let svHighItem = createSelfVoiceMenuItem(title: "High", action: #selector(setSelfVoiceHigh), tag: MenuTag.svHigh.rawValue)
+        let svHighItem = createSelfVoiceMenuItem(title: "High", action: #selector(setSelfVoiceHigh), tag: MenuTag.svHigh.rawValue, iconName: "person.2.wave.2.fill")
         menu.addItem(svHighItem)
         
         menu.addItem(NSMenuItem.separator())
@@ -232,54 +230,112 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         statusItem?.menu = menu
     }
     
-    private func createDeviceHeaderItem(name: String, battery: Int?) -> NSMenuItem {
+    private func createDeviceHeaderItem(name: String, battery: Int?, isConnected: Bool = false) -> NSMenuItem {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.isEnabled = false
         
         // Create a custom view for the device header
-        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: battery != nil ? 44 : 28))
+        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: battery != nil ? 48 : 32))
+        
+        // Blue circle background for connected state
+        let circleSize: CGFloat = 32
+        let circleX: CGFloat = 10
+        let circleY: CGFloat = (containerView.frame.height - circleSize) / 2
+        
+        if isConnected {
+            let circleView = NSView(frame: NSRect(x: circleX, y: circleY, width: circleSize, height: circleSize))
+            circleView.wantsLayer = true
+            circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+            circleView.layer?.cornerRadius = circleSize / 2
+            containerView.addSubview(circleView)
+        }
         
         // Headphone icon
         let iconSize: CGFloat = 20
-        let iconView = NSImageView(frame: NSRect(x: 12, y: (containerView.frame.height - iconSize) / 2, width: iconSize, height: iconSize))
+        let iconX = circleX + (circleSize - iconSize) / 2
+        let iconY = circleY + (circleSize - iconSize) / 2
+        let iconView = NSImageView(frame: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
         if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
             let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
-            iconView.contentTintColor = .secondaryLabelColor
+            iconView.contentTintColor = isConnected ? .white : .secondaryLabelColor
         }
         containerView.addSubview(iconView)
         
         // Device name label
+        let textX: CGFloat = circleX + circleSize + 10
         let nameLabel = NSTextField(labelWithString: name)
         nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         nameLabel.textColor = .labelColor
-        nameLabel.frame = NSRect(x: 40, y: battery != nil ? 22 : 4, width: 200, height: 18)
+        nameLabel.frame = NSRect(x: textX, y: battery != nil ? 26 : 7, width: 200, height: 18)
         containerView.addSubview(nameLabel)
         
-        // Battery label (if available)
+        // Battery label with icon (if available)
         if let battery = battery {
-            let batteryLabel = NSTextField(labelWithString: "\(battery)%")
+            let batteryText = "\(battery)%"
+            let batteryLabel = NSTextField(labelWithString: batteryText)
             batteryLabel.font = NSFont.systemFont(ofSize: 11)
             batteryLabel.textColor = .secondaryLabelColor
-            batteryLabel.frame = NSRect(x: 40, y: 4, width: 200, height: 16)
+            batteryLabel.sizeToFit()
+            let batteryY: CGFloat = 8
+            batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: 16)
             containerView.addSubview(batteryLabel)
+            
+            // Battery icon - vertically centered with text, closer spacing
+            let iconHeight: CGFloat = 11
+            let iconY = batteryY + (16 - iconHeight) / 2
+            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: iconY, width: 20, height: iconHeight))
+            let batteryIconName = batteryIconNameForLevel(battery)
+            if let batteryImage = NSImage(systemSymbolName: batteryIconName, accessibilityDescription: "Battery") {
+                let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+                batteryIconView.image = batteryImage.withSymbolConfiguration(config)
+                batteryIconView.contentTintColor = batteryColorForLevel(battery)
+            }
+            containerView.addSubview(batteryIconView)
         }
         
         item.view = containerView
         return item
     }
     
-    private func createNCMenuItem(title: String, action: Selector, tag: Int) -> NSMenuItem {
-        let item = NSMenuItem(title: "    \(title)", action: action, keyEquivalent: "")
+    private func createNCMenuItem(title: String, action: Selector, tag: Int, iconName: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         item.tag = tag
+        item.indentationLevel = 1
+        if let image = NSImage(systemSymbolName: iconName, accessibilityDescription: title) {
+            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            item.image = image.withSymbolConfiguration(config)
+        }
         return item
     }
     
-    private func createSelfVoiceMenuItem(title: String, action: Selector, tag: Int) -> NSMenuItem {
-        let item = NSMenuItem(title: "    \(title)", action: action, keyEquivalent: "")
+    private func createSelfVoiceMenuItem(title: String, action: Selector, tag: Int, iconName: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         item.tag = tag
+        item.indentationLevel = 1
+        if let image = NSImage(systemSymbolName: iconName, accessibilityDescription: title) {
+            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            item.image = image.withSymbolConfiguration(config)
+        }
+        return item
+    }
+    
+    private func createSectionHeader(title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        
+        // Use a custom view to ensure black text and left alignment
+        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        
+        let label = NSTextField(labelWithString: title)
+        label.font = NSFont.systemFont(ofSize: 13, weight: .bold)
+        label.textColor = .black
+        label.frame = NSRect(x: 20, y: 2, width: 250, height: 18)
+        containerView.addSubview(label)
+        
+        item.view = containerView
         return item
     }
     
@@ -371,37 +427,91 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     // MARK: - Menu Update Methods
     
-    private func updateDeviceHeader(name: String, battery: Int?) {
+    private func updateDeviceHeader(name: String, battery: Int?, isConnected: Bool = false) {
         guard let menu = statusItem?.menu,
               let deviceItem = menu.item(withTag: MenuTag.deviceHeader.rawValue) else { return }
         
         // Recreate the custom view
-        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 250, height: battery != nil ? 44 : 28))
+        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: battery != nil ? 48 : 32))
         
+        // Blue circle background for connected state
+        let circleSize: CGFloat = 32
+        let circleX: CGFloat = 10
+        let circleY: CGFloat = (containerView.frame.height - circleSize) / 2
+        
+        if isConnected {
+            let circleView = NSView(frame: NSRect(x: circleX, y: circleY, width: circleSize, height: circleSize))
+            circleView.wantsLayer = true
+            circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+            circleView.layer?.cornerRadius = circleSize / 2
+            containerView.addSubview(circleView)
+        }
+        
+        // Headphone icon
         let iconSize: CGFloat = 20
-        let iconView = NSImageView(frame: NSRect(x: 12, y: (containerView.frame.height - iconSize) / 2, width: iconSize, height: iconSize))
+        let iconX = circleX + (circleSize - iconSize) / 2
+        let iconY = circleY + (circleSize - iconSize) / 2
+        let iconView = NSImageView(frame: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
         if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
             let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
-            iconView.contentTintColor = .secondaryLabelColor
+            iconView.contentTintColor = isConnected ? .white : .secondaryLabelColor
         }
         containerView.addSubview(iconView)
         
+        // Device name label
+        let textX: CGFloat = circleX + circleSize + 10
         let nameLabel = NSTextField(labelWithString: name)
         nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         nameLabel.textColor = .labelColor
-        nameLabel.frame = NSRect(x: 40, y: battery != nil ? 22 : 4, width: 200, height: 18)
+        nameLabel.frame = NSRect(x: textX, y: battery != nil ? 26 : 7, width: 200, height: 18)
         containerView.addSubview(nameLabel)
         
+        // Battery label with icon (if available)
         if let battery = battery {
-            let batteryLabel = NSTextField(labelWithString: "\(battery)%")
+            let batteryText = "\(battery)%"
+            let batteryLabel = NSTextField(labelWithString: batteryText)
             batteryLabel.font = NSFont.systemFont(ofSize: 11)
             batteryLabel.textColor = .secondaryLabelColor
-            batteryLabel.frame = NSRect(x: 40, y: 4, width: 200, height: 16)
+            batteryLabel.sizeToFit()
+            let batteryY: CGFloat = 8
+            batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: 16)
             containerView.addSubview(batteryLabel)
+            
+            // Battery icon - vertically centered with text, closer spacing
+            let iconHeight: CGFloat = 11
+            let iconY = batteryY + (16 - iconHeight) / 2
+            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: iconY, width: 20, height: iconHeight))
+            let batteryIconName = batteryIconNameForLevel(battery)
+            if let batteryImage = NSImage(systemSymbolName: batteryIconName, accessibilityDescription: "Battery") {
+                let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+                batteryIconView.image = batteryImage.withSymbolConfiguration(config)
+                batteryIconView.contentTintColor = batteryColorForLevel(battery)
+            }
+            containerView.addSubview(batteryIconView)
         }
         
         deviceItem.view = containerView
+    }
+    
+    private func batteryIconNameForLevel(_ level: Int) -> String {
+        switch level {
+        case 0...10: return "battery.0percent"
+        case 11...25: return "battery.25percent"
+        case 26...50: return "battery.50percent"
+        case 51...75: return "battery.75percent"
+        default: return "battery.100percent"
+        }
+    }
+    
+    private func batteryColorForLevel(_ level: Int) -> NSColor {
+        if level <= 20 {
+            return .systemRed
+        } else if level <= 50 {
+            return .systemOrange
+        } else {
+            return .secondaryLabelColor
+        }
     }
     
     private func updateNCSelection(level: UInt8) {
@@ -1165,8 +1275,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private func updateMenuWithHeadphoneInfo(_ info: HeadphoneInfo) {
         currentHeadphoneInfo = info
         
-        // Update device header with name and battery
-        updateDeviceHeader(name: info.name, battery: info.batteryLevel)
+        // Update device header with name, battery, and connection status
+        updateDeviceHeader(name: info.name, battery: info.batteryLevel, isConnected: info.isConnected)
         
         // Update status bar icon
         if let battery = info.batteryLevel {
@@ -1225,7 +1335,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func updateBatteryInMenu(_ level: Int) {
         if let info = currentHeadphoneInfo {
-            updateDeviceHeader(name: info.name, battery: level)
+            updateDeviceHeader(name: info.name, battery: level, isConnected: info.isConnected)
             updateStatusBarIcon(batteryLevel: level)
         }
     }
