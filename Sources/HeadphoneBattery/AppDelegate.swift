@@ -232,25 +232,58 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func createDeviceHeaderItem(name: String, battery: Int?, isConnected: Bool = false) -> NSMenuItem {
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        item.isEnabled = false
+        item.isEnabled = true
         
-        // Create a custom view for the device header
+        // When disconnected, use a standard menu item (clickable) with styled appearance
+        if !isConnected {
+            item.title = "     " + name  // Indent for icon space
+            item.action = #selector(connectToDevice)
+            item.target = self
+            
+            // Create a composite image with grey circle and black headphone icon
+            let imageSize = NSSize(width: 32, height: 32)
+            let compositeImage = NSImage(size: imageSize, flipped: false) { rect in
+                // Draw grey circle
+                NSColor.systemGray.setFill()
+                let circlePath = NSBezierPath(ovalIn: rect)
+                circlePath.fill()
+                
+                // Draw headphone icon
+                if let headphoneImage = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
+                    let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+                    if let configuredImage = headphoneImage.withSymbolConfiguration(config) {
+                        let iconSize = NSSize(width: 18, height: 18)
+                        let iconRect = NSRect(
+                            x: (rect.width - iconSize.width) / 2,
+                            y: (rect.height - iconSize.height) / 2,
+                            width: iconSize.width,
+                            height: iconSize.height
+                        )
+                        configuredImage.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+                    }
+                }
+                return true
+            }
+            compositeImage.isTemplate = false
+            item.image = compositeImage
+            return item
+        }
+        
+        // Connected state uses custom view with full styling
         let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: battery != nil ? 48 : 32))
         
-        // Blue circle background for connected state
+        // Blue circle background
         let circleSize: CGFloat = 32
         let circleX: CGFloat = 10
         let circleY: CGFloat = (containerView.frame.height - circleSize) / 2
         
-        if isConnected {
-            let circleView = NSView(frame: NSRect(x: circleX, y: circleY, width: circleSize, height: circleSize))
-            circleView.wantsLayer = true
-            circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
-            circleView.layer?.cornerRadius = circleSize / 2
-            containerView.addSubview(circleView)
-        }
+        let circleView = NSView(frame: NSRect(x: circleX, y: circleY, width: circleSize, height: circleSize))
+        circleView.wantsLayer = true
+        circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        circleView.layer?.cornerRadius = circleSize / 2
+        containerView.addSubview(circleView)
         
-        // Headphone icon
+        // Headphone icon (white when connected)
         let iconSize: CGFloat = 20
         let iconX = circleX + (circleSize - iconSize) / 2
         let iconY = circleY + (circleSize - iconSize) / 2
@@ -258,7 +291,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
             let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
-            iconView.contentTintColor = isConnected ? .white : .secondaryLabelColor
+            iconView.contentTintColor = .white
         }
         containerView.addSubview(iconView)
         
@@ -281,10 +314,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: 16)
             containerView.addSubview(batteryLabel)
             
-            // Battery icon - vertically centered with text, closer spacing
+            // Battery icon
             let iconHeight: CGFloat = 11
-            let iconY = batteryY + (16 - iconHeight) / 2
-            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: iconY, width: 20, height: iconHeight))
+            let batteryIconY = batteryY + (16 - iconHeight) / 2
+            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: batteryIconY, width: 20, height: iconHeight))
             let batteryIconName = batteryIconNameForLevel(battery)
             if let batteryImage = NSImage(systemSymbolName: batteryIconName, accessibilityDescription: "Battery") {
                 let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
@@ -431,23 +464,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         guard let menu = statusItem?.menu,
               let deviceItem = menu.item(withTag: MenuTag.deviceHeader.rawValue) else { return }
         
-        // Recreate the custom view
+        // When disconnected, use a standard menu item (clickable) with styled appearance
+        if !isConnected {
+            deviceItem.view = nil  // Remove custom view to make it clickable
+            deviceItem.title = "     " + name  // Indent for icon space
+            deviceItem.action = #selector(connectToDevice)
+            deviceItem.target = self
+            deviceItem.isEnabled = true
+            
+            // Create a composite image with grey circle and black headphone icon
+            let imageSize = NSSize(width: 32, height: 32)
+            let compositeImage = NSImage(size: imageSize, flipped: false) { rect in
+                // Draw grey circle
+                NSColor.systemGray.setFill()
+                let circlePath = NSBezierPath(ovalIn: rect)
+                circlePath.fill()
+                
+                // Draw headphone icon
+                if let headphoneImage = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
+                    let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+                    if let configuredImage = headphoneImage.withSymbolConfiguration(config) {
+                        let iconSize = NSSize(width: 18, height: 18)
+                        let iconRect = NSRect(
+                            x: (rect.width - iconSize.width) / 2,
+                            y: (rect.height - iconSize.height) / 2,
+                            width: iconSize.width,
+                            height: iconSize.height
+                        )
+                        configuredImage.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1.0)
+                    }
+                }
+                return true
+            }
+            compositeImage.isTemplate = false
+            deviceItem.image = compositeImage
+            return
+        }
+        
+        // Connected state - use custom view
+        deviceItem.action = nil
+        deviceItem.target = nil
+        deviceItem.image = nil
+        deviceItem.title = ""
+        
+        // Create custom view for connected state
         let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: battery != nil ? 48 : 32))
         
-        // Blue circle background for connected state
+        // Blue circle background
         let circleSize: CGFloat = 32
         let circleX: CGFloat = 10
         let circleY: CGFloat = (containerView.frame.height - circleSize) / 2
         
-        if isConnected {
-            let circleView = NSView(frame: NSRect(x: circleX, y: circleY, width: circleSize, height: circleSize))
-            circleView.wantsLayer = true
-            circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
-            circleView.layer?.cornerRadius = circleSize / 2
-            containerView.addSubview(circleView)
-        }
+        let circleView = NSView(frame: NSRect(x: circleX, y: circleY, width: circleSize, height: circleSize))
+        circleView.wantsLayer = true
+        circleView.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        circleView.layer?.cornerRadius = circleSize / 2
+        containerView.addSubview(circleView)
         
-        // Headphone icon
+        // Headphone icon (white)
         let iconSize: CGFloat = 20
         let iconX = circleX + (circleSize - iconSize) / 2
         let iconY = circleY + (circleSize - iconSize) / 2
@@ -455,7 +529,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
             let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
-            iconView.contentTintColor = isConnected ? .white : .secondaryLabelColor
+            iconView.contentTintColor = .white
         }
         containerView.addSubview(iconView)
         
@@ -558,6 +632,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             menu.item(withTag: MenuTag.svHigh.rawValue)?.state = .on
         default:
             break
+        }
+    }
+    
+    private func updateMenuItemsVisibility(isConnected: Bool) {
+        guard let menu = statusItem?.menu else { return }
+        
+        // Hide/show NC section
+        menu.item(withTag: MenuTag.noiseCancellationHeader.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.ncOff.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.ncLow.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.ncHigh.rawValue)?.isHidden = !isConnected
+        
+        // Hide/show Self Voice section
+        menu.item(withTag: MenuTag.selfVoiceHeader.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.svOff.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.svLow.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.svMedium.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.svHigh.rawValue)?.isHidden = !isConnected
+        
+        // Hide/show Info and Settings submenus
+        menu.item(withTag: MenuTag.infoSubmenu.rawValue)?.isHidden = !isConnected
+        menu.item(withTag: MenuTag.settingsSubmenu.rawValue)?.isHidden = !isConnected
+        
+        // Hide/show Paired Devices
+        menu.item(withTag: MenuTag.pairedDevices.rawValue)?.isHidden = !isConnected
+        
+        // Hide separators when disconnected (find by index since separators don't have tags)
+        // We need to hide the separators between sections
+        for (index, item) in menu.items.enumerated() {
+            if item.isSeparatorItem {
+                // Keep only the separator before Quit visible when disconnected
+                let isLastSeparator = index == menu.items.count - 2
+                item.isHidden = !isConnected && !isLastSeparator
+            }
         }
     }
     
@@ -1112,13 +1220,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         var isConnected = false
         var foundBoseDevice = false
         var isProcessingBoseDevice = false
+        var inConnectedSection = false
         
         for (_, line) in lines.enumerated() {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
             
+            // Track whether we're in Connected or Not Connected section
+            if trimmedLine == "Connected:" {
+                inConnectedSection = true
+                continue
+            }
+            if trimmedLine == "Not Connected:" {
+                inConnectedSection = false
+                continue
+            }
+            
             if trimmedLine.contains("Bose") && trimmedLine.hasSuffix(":") {
                 currentDevice = String(trimmedLine.dropLast())
-                isConnected = true
+                isConnected = inConnectedSection
                 foundBoseDevice = true
                 isProcessingBoseDevice = true
                 batteryLevel = nil
@@ -1278,9 +1397,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Update device header with name, battery, and connection status
         updateDeviceHeader(name: info.name, battery: info.batteryLevel, isConnected: info.isConnected)
         
+        // Update menu items visibility based on connection state
+        updateMenuItemsVisibility(isConnected: info.isConnected)
+        
         // Update status bar icon
         if let battery = info.batteryLevel {
             updateStatusBarIcon(batteryLevel: battery)
+        } else {
+            // Reset status bar icon color when no battery info
+            statusItem?.button?.contentTintColor = nil
         }
         
         // Update Info submenu
@@ -1295,8 +1420,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         // Update tooltip
         if let button = statusItem?.button {
-            let batteryInfo = info.batteryLevel.map { "\($0)%" } ?? "Unknown"
-            button.toolTip = "\(info.name)\nBattery: \(batteryInfo)"
+            if info.isConnected {
+                let batteryInfo = info.batteryLevel.map { "\($0)%" } ?? "Unknown"
+                button.toolTip = "\(info.name)\nBattery: \(batteryInfo)"
+            } else {
+                button.toolTip = "No Bose Device Connected"
+            }
         }
     }
     
@@ -1375,6 +1504,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     @objc private func refreshBattery() {
         checkForBoseDevices()
+    }
+    
+    @objc private func connectToDevice() {
+        guard let deviceAddr = deviceAddress else { return }
+        attemptBluetoothConnection(address: deviceAddr)
+    }
+    
+    private func attemptBluetoothConnection(address: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
+                return
+            }
+            
+            // Find the Bose device
+            guard let device = pairedDevices.first(where: { device in
+                if let deviceAddress = device.addressString {
+                    let cleanDeviceAddr = deviceAddress.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
+                    let cleanTargetAddr = address.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
+                    return cleanDeviceAddr == cleanTargetAddr
+                }
+                if let name = device.name, name.contains("Bose") {
+                    return true
+                }
+                return false
+            }) else {
+                return
+            }
+            
+            // Attempt to connect
+            if !device.isConnected() {
+                let result = device.openConnection()
+                if result == kIOReturnSuccess {
+                    // Wait a moment for connection to establish
+                    Thread.sleep(forTimeInterval: 1.0)
+                    // Refresh device status
+                    DispatchQueue.main.async {
+                        self?.checkForBoseDevices()
+                    }
+                }
+            }
+        }
     }
     
     @objc private func setNoiseCancellationOff() {
