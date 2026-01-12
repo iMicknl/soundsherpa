@@ -17,6 +17,8 @@ struct HeadphoneInfo {
     let voicePromptsEnabled: Bool?
     let selfVoiceLevel: String?
     let pairedDevices: [String]?
+    let pairedDevicesCount: Int?
+    let connectedDevicesCount: Int?
 }
 
 enum PromptLanguage: UInt8 {
@@ -847,31 +849,122 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         responseSemaphore = nil
         
         // Expected: [0x04, 0x04, 0x03, numDevices*6, numConnected, ...addresses...]
+        // numConnected includes the current device
+        // Device order: [current device, other connected devices..., paired but not connected devices...]
         if responseBuffer.count >= 5 && responseBuffer[0] == 0x04 && responseBuffer[1] == 0x04 && responseBuffer[2] == 0x03 {
             let numDevicesBytes = Int(responseBuffer[3])
             let numDevices = numDevicesBytes / 6
             let numConnected = Int(responseBuffer[4])
             
-            print("Paired devices: \(numDevices), connected: \(numConnected)")
+            print("===== PAIRED DEVICES DEBUG =====")
+            print("Total paired devices: \(numDevices)")
+            print("Number connected (including current): \(numConnected)")
+            print("Raw response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
+            print("================================")
             
             var devices: [String] = []
             var offset = 5
+            
+            // According to the protocol:
+            // - First device is always the current device (this Mac)
+            // - Next (numConnected - 1) devices are other connected devices
+            // - Remaining devices are paired but not connected
             for i in 0..<numDevices {
                 if offset + 6 <= responseBuffer.count {
                     let addressBytes = Array(responseBuffer[offset..<(offset + 6)])
                     let address = addressBytes.map { String(format: "%02X", $0) }.joined(separator: ":")
-                    let status = i < numConnected ? " (Connected)" : ""
-                    devices.append(address + status)
+                    
+                    // Try to get the device name
+                    var deviceName: String?
+                    
+                    if i == 0 {
+                        // First device is the current device (this Mac)
+                        // Try to get the Mac's computer name
+                        deviceName = Host.current().localizedName
+                        if deviceName == nil {
+                            deviceName = getDeviceNameForAddress(address)
+                        }
+                    } else {
+                        // For other devices, look up from Bluetooth
+                        deviceName = getDeviceNameForAddress(address)
+                    }
+                    
+                    let indicator: String
+                    if i == 0 {
+                        // First device is the current device
+                        indicator = "! "
+                    } else if i < numConnected {
+                        // Other connected devices (numConnected includes the current device, so we check i < numConnected)
+                        indicator = "* "
+                    } else {
+                        // Paired but not connected
+                        indicator = "  "
+                    }
+                    
+                    // Format: "! Device Name (AA:BB:CC:DD:EE:FF)" or just address if name not found
+                    if let name = deviceName {
+                        devices.append("\(indicator)\(name) (\(address))")
+                    } else {
+                        devices.append("\(indicator)\(address)")
+                    }
+                    
                     offset += 6
                 }
             }
             
             DispatchQueue.main.async {
-                self.updatePairedDevicesInMenu(devices)
+                self.updatePairedDevicesInMenu(devices, totalCount: numDevices, connectedCount: numConnected)
+                
+                // Also update the currentHeadphoneInfo with paired devices info
+                if let info = self.currentHeadphoneInfo {
+                    let updatedInfo = HeadphoneInfo(
+                        name: info.name,
+                        batteryLevel: info.batteryLevel,
+                        isConnected: info.isConnected,
+                        firmwareVersion: info.firmwareVersion,
+                        noiseCancellationEnabled: info.noiseCancellationEnabled,
+                        audioCodec: info.audioCodec,
+                        vendorId: info.vendorId,
+                        productId: info.productId,
+                        services: info.services,
+                        serialNumber: info.serialNumber,
+                        language: info.language,
+                        voicePromptsEnabled: info.voicePromptsEnabled,
+                        selfVoiceLevel: info.selfVoiceLevel,
+                        pairedDevices: devices,
+                        pairedDevicesCount: numDevices,
+                        connectedDevicesCount: numConnected
+                    )
+                    self.currentHeadphoneInfo = updatedInfo
+                }
             }
         } else {
             print("Unexpected paired devices response: \(responseBuffer.map { String(format: "0x%02X", $0) }.joined(separator: " "))")
         }
+    }
+    
+    // Helper function to get device name from Bluetooth address
+    private func getDeviceNameForAddress(_ address: String) -> String? {
+        // Get all paired devices from macOS
+        guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
+            return nil
+        }
+        
+        // Try to find a device matching this address
+        for device in pairedDevices {
+            if let deviceAddress = device.addressString {
+                // Compare addresses (case-insensitive, handle different formats)
+                let cleanDeviceAddr = deviceAddress.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
+                let cleanTargetAddr = address.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
+                
+                if cleanDeviceAddr == cleanTargetAddr {
+                    // Found matching device, return its name
+                    return device.name
+                }
+            }
+        }
+        
+        return nil
     }
     
     @objc func newRFCOMMChannelOpened(userNotification: IOBluetoothUserNotification, channel: IOBluetoothRFCOMMChannel) {
@@ -1013,7 +1106,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             language: info.language,
             voicePromptsEnabled: info.voicePromptsEnabled,
             selfVoiceLevel: info.selfVoiceLevel,
-            pairedDevices: info.pairedDevices
+            pairedDevices: info.pairedDevices,
+            pairedDevicesCount: info.pairedDevicesCount,
+            connectedDevicesCount: info.connectedDevicesCount
         )
         
         currentHeadphoneInfo = updatedInfo
@@ -1064,7 +1159,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             language: nil,
             voicePromptsEnabled: nil,
             selfVoiceLevel: nil,
-            pairedDevices: nil
+            pairedDevices: nil,
+            pairedDevicesCount: nil,
+            connectedDevicesCount: nil
         )
         updateMenuWithHeadphoneInfo(info)
     }
@@ -1198,7 +1295,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                         language: nil,
                         voicePromptsEnabled: nil,
                         selfVoiceLevel: nil,
-                        pairedDevices: nil
+                        pairedDevices: nil,
+                        pairedDevicesCount: nil,
+                        connectedDevicesCount: nil
                     )
                     
                     DispatchQueue.main.async {
@@ -1240,7 +1339,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 language: nil,
                 voicePromptsEnabled: nil,
                 selfVoiceLevel: nil,
-                pairedDevices: nil
+                pairedDevices: nil,
+                pairedDevicesCount: nil,
+                connectedDevicesCount: nil
             )
             
             DispatchQueue.main.async {
@@ -1344,10 +1445,55 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         // Update paired devices (index 13)
         if let pairedDevicesItem = menu.item(at: 13) {
-            if let devices = info.pairedDevices, !devices.isEmpty {
+            if let count = info.pairedDevicesCount, let connectedCount = info.connectedDevicesCount {
+                pairedDevicesItem.title = "Paired Devices: \(count) (\(connectedCount) connected)"
+                
+                // If we have the device list, create a submenu
+                if let devices = info.pairedDevices, !devices.isEmpty {
+                    let submenu = NSMenu()
+                    submenu.autoenablesItems = false
+                    
+                    let headerItem = NSMenuItem(title: "! = Current device, * = Connected", action: nil, keyEquivalent: "")
+                    headerItem.isEnabled = false
+                    submenu.addItem(headerItem)
+                    submenu.addItem(NSMenuItem.separator())
+                    
+                    for device in devices {
+                        let deviceItem = NSMenuItem(title: device, action: nil, keyEquivalent: "")
+                        deviceItem.isEnabled = false
+                        submenu.addItem(deviceItem)
+                    }
+                    
+                    pairedDevicesItem.submenu = submenu
+                    pairedDevicesItem.isEnabled = true  // Enable the menu item
+                }
+            } else if let devices = info.pairedDevices, !devices.isEmpty {
                 pairedDevicesItem.title = "Paired Devices: \(devices.count)"
+                
+                // Create submenu even without count info
+                let submenu = NSMenu()
+                submenu.autoenablesItems = false
+                
+                let headerItem = NSMenuItem(title: "! = Current device, * = Connected", action: nil, keyEquivalent: "")
+                headerItem.isEnabled = false
+                submenu.addItem(headerItem)
+                submenu.addItem(NSMenuItem.separator())
+                
+                for device in devices {
+                    let deviceItem = NSMenuItem(title: device, action: nil, keyEquivalent: "")
+                    deviceItem.isEnabled = false
+                    submenu.addItem(deviceItem)
+                }
+                
+                pairedDevicesItem.submenu = submenu
+                pairedDevicesItem.isEnabled = true  // Enable the menu item
             } else {
-                pairedDevicesItem.title = "Paired Devices: Unknown"
+                // Only update title if we don't already have a submenu
+                // This prevents removing the submenu when info is updated without paired devices data
+                if pairedDevicesItem.submenu == nil {
+                    pairedDevicesItem.title = "Paired Devices: Unknown"
+                    pairedDevicesItem.isEnabled = false  // Keep it disabled if no data
+                }
             }
         }
         
@@ -1682,10 +1828,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
     }
     
-    private func updatePairedDevicesInMenu(_ devices: [String]) {
+    private func updatePairedDevicesInMenu(_ devices: [String], totalCount: Int, connectedCount: Int) {
         guard let menu = statusItem?.menu else { return }
+        
+        // Update the main paired devices item to show count
         if let pairedDevicesItem = menu.item(at: 13) {
-            pairedDevicesItem.title = "Paired Devices: \(devices.count)"
+            pairedDevicesItem.title = "Paired Devices: \(totalCount) (\(connectedCount) connected)"
+            
+            // Remove any existing submenu
+            pairedDevicesItem.submenu = nil
+            
+            // Create a submenu to show the device list
+            if !devices.isEmpty {
+                let submenu = NSMenu()
+                submenu.autoenablesItems = false
+                
+                // Add header
+                let headerItem = NSMenuItem(title: "! = Current device, * = Connected", action: nil, keyEquivalent: "")
+                headerItem.isEnabled = false
+                submenu.addItem(headerItem)
+                submenu.addItem(NSMenuItem.separator())
+                
+                // Add each device
+                for device in devices {
+                    let deviceItem = NSMenuItem(title: device, action: nil, keyEquivalent: "")
+                    deviceItem.isEnabled = false
+                    submenu.addItem(deviceItem)
+                }
+                
+                pairedDevicesItem.submenu = submenu
+                pairedDevicesItem.isEnabled = true  // Enable the menu item so it can be clicked
+            }
         }
     }
     

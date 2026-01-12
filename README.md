@@ -11,6 +11,10 @@ A native macOS menu bar application that monitors Bose QC35 headphone battery le
 - **Firmware Version**: Shows firmware version when available
 - **Noise Cancellation Status**: Indicates if noise cancellation is enabled (when detectable)
 - **Audio Codec**: Shows current audio codec being used
+- **Paired Devices**: View all paired devices with connection status indicators
+  - `!` indicates the current device (your Mac)
+  - `*` indicates other connected devices
+  - Shows total paired and connected device counts
 
 ### Status Bar Indicators
 - **Green/Default**: Battery > 50%
@@ -31,6 +35,10 @@ The app can extract the following information from Bose QC35 headphones:
 4. **Firmware Version** - When available via Bluetooth services
 5. **Noise Cancellation** - Detected through manufacturer data (when available)
 6. **Audio Codec** - SBC/AAC detection
+7. **Paired Devices** - Shows all paired devices with connection indicators
+   - Total paired device count
+   - Number of connected devices
+   - Device addresses with status (current/connected/paired)
 
 ## Technical Details
 
