@@ -389,7 +389,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         
         if let button = statusItem?.button {
-            let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones")
+            let image = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones")
             image?.isTemplate = true
             button.image = image
             button.imagePosition = .imageOnly
@@ -497,7 +497,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 circlePath.fill()
                 
                 // Draw headphone icon
-                if let headphoneImage = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
+                if let headphoneImage = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones") {
                     let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                     if let configuredImage = headphoneImage.withSymbolConfiguration(config) {
                         let iconSize = NSSize(width: 18, height: 18)
@@ -536,7 +536,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let iconX = circleX + (circleSize - iconSize) / 2
         let iconY = circleY + (circleSize - iconSize) / 2
         let iconView = NSImageView(frame: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
-        if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
+        if let image = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones") {
             let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
             iconView.contentTintColor = .white
@@ -562,10 +562,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: 16)
             containerView.addSubview(batteryLabel)
             
-            // Battery icon
+            // Battery icon - moved left and vertically centered
             let iconHeight: CGFloat = 11
-            let batteryIconY = batteryY + (16 - iconHeight) / 2
-            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: batteryIconY, width: 20, height: iconHeight))
+            let batteryIconY = batteryY + (16 - iconHeight) / 2 + 2
+            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width - 1, y: batteryIconY, width: 20, height: iconHeight))
             let batteryIconName = batteryIconNameForLevel(battery)
             if let batteryImage = NSImage(systemSymbolName: batteryIconName, accessibilityDescription: "Battery") {
                 let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
@@ -726,7 +726,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 circlePath.fill()
                 
                 // Draw headphone icon
-                if let headphoneImage = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
+                if let headphoneImage = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones") {
                     let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                     if let configuredImage = headphoneImage.withSymbolConfiguration(config) {
                         let iconSize = NSSize(width: 18, height: 18)
@@ -771,7 +771,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let iconX = circleX + (circleSize - iconSize) / 2
         let iconY = circleY + (circleSize - iconSize) / 2
         let iconView = NSImageView(frame: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
-        if let image = NSImage(systemSymbolName: "headphones", accessibilityDescription: "Headphones") {
+        if let image = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones") {
             let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
             iconView.contentTintColor = .white
@@ -797,10 +797,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: 16)
             containerView.addSubview(batteryLabel)
             
-            // Battery icon - vertically centered with text, closer spacing
+            // Battery icon - moved left and vertically centered
             let iconHeight: CGFloat = 11
-            let iconY = batteryY + (16 - iconHeight) / 2
-            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: iconY, width: 20, height: iconHeight))
+            let iconY = batteryY + (16 - iconHeight) / 2 + 2
+            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width - 1, y: iconY, width: 20, height: iconHeight))
             let batteryIconName = batteryIconNameForLevel(battery)
             if let batteryImage = NSImage(systemSymbolName: batteryIconName, accessibilityDescription: "Battery") {
                 let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
@@ -814,11 +814,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func batteryIconNameForLevel(_ level: Int) -> String {
+        // Match macOS battery icon behavior - icon reflects actual level
         switch level {
         case 0...10: return "battery.0percent"
-        case 11...25: return "battery.25percent"
-        case 26...50: return "battery.50percent"
-        case 51...75: return "battery.75percent"
+        case 11...35: return "battery.25percent"
+        case 36...60: return "battery.50percent"
+        case 61...85: return "battery.75percent"
         default: return "battery.100percent"
         }
     }
@@ -882,6 +883,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func updateMenuItemsVisibility(isConnected: Bool) {
         guard let menu = statusItem?.menu else { return }
+        
+        // Update menu bar icon based on connection state
+        if let button = statusItem?.button {
+            let iconName = isConnected ? "headphones.over.ear" : "headphones.slash"
+            let image = NSImage(systemSymbolName: iconName, accessibilityDescription: "Headphones")
+            image?.isTemplate = true
+            button.image = image
+        }
         
         // Hide/show NC section
         menu.item(withTag: MenuTag.noiseCancellationHeader.rawValue)?.isHidden = !isConnected
@@ -1007,13 +1016,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             
             if response.count >= 4 && response[0] == 0x04 && response[1] == 0x01 && response[2] == 0x07 {
                 print("Connect command acknowledged for device: \(address)")
-                Thread.sleep(forTimeInterval: 1.0)
-                DispatchQueue.main.async {
-                    self.fetchPairedDevices()
-                }
             } else {
-                print("Connect command failed or no response. Response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
+                print("Connect command response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
             }
+            
+            // Always refresh after a delay to let the headphones update their state
+            Thread.sleep(forTimeInterval: 1.5)
+            self.fetchPairedDevices()
         }
     }
     
@@ -1036,13 +1045,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             
             if response.count >= 4 && response[0] == 0x04 && response[1] == 0x02 && response[2] == 0x07 {
                 print("Disconnect command acknowledged for device: \(address)")
-                Thread.sleep(forTimeInterval: 0.5)
-                DispatchQueue.main.async {
-                    self.fetchPairedDevices()
-                }
             } else {
-                print("Disconnect command failed or no response. Response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
+                print("Disconnect command response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
             }
+            
+            // Always refresh after a delay to let the headphones update their state
+            Thread.sleep(forTimeInterval: 1.0)
+            self.fetchPairedDevices()
         }
     }
     
