@@ -461,15 +461,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         menu.addItem(NSMenuItem.separator())
         
-        // === INFO SUBMENU ===
-        let infoItem = NSMenuItem(title: "Info", action: nil, keyEquivalent: "")
-        infoItem.tag = MenuTag.infoSubmenu.rawValue
-        let infoSubmenu = createInfoSubmenu()
-        infoItem.submenu = infoSubmenu
-        menu.addItem(infoItem)
-        
-        // === SETTINGS SUBMENU ===
-        let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        // === ADVANCED SETTINGS SUBMENU ===
+        let settingsItem = NSMenuItem(title: "Advanced Settings", action: nil, keyEquivalent: "")
         settingsItem.tag = MenuTag.settingsSubmenu.rawValue
         let settingsSubmenu = createSettingsSubmenu()
         settingsItem.submenu = settingsSubmenu
@@ -592,7 +585,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         item.tag = tag
         item.indentationLevel = 1
         if let image = NSImage(systemSymbolName: iconName, accessibilityDescription: title) {
-            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
             item.image = image.withSymbolConfiguration(config)
         }
         return item
@@ -604,7 +597,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         item.tag = tag
         item.indentationLevel = 1
         if let image = NSImage(systemSymbolName: iconName, accessibilityDescription: title) {
-            let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .regular)
             item.image = image.withSymbolConfiguration(config)
         }
         return item
@@ -627,10 +620,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         return item
     }
     
-    private func createInfoSubmenu() -> NSMenu {
+    private func createSettingsSubmenu() -> NSMenu {
         let submenu = NSMenu()
         submenu.autoenablesItems = false
         
+        // === INFO ITEMS (moved from Info submenu) ===
         let firmwareItem = NSMenuItem(title: "Firmware: Unknown", action: nil, keyEquivalent: "")
         firmwareItem.isEnabled = false
         firmwareItem.tag = 401
@@ -662,13 +656,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         refreshItem.target = self
         submenu.addItem(refreshItem)
         
-        return submenu
-    }
-    
-    private func createSettingsSubmenu() -> NSMenu {
-        let submenu = NSMenu()
-        submenu.autoenablesItems = false
+        submenu.addItem(NSMenuItem.separator())
         
+        // === SETTINGS ITEMS ===
         // Language submenu
         let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         let languageSubmenu = NSMenu()
@@ -906,8 +896,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         menu.item(withTag: MenuTag.svMedium.rawValue)?.isHidden = !isConnected
         menu.item(withTag: MenuTag.svHigh.rawValue)?.isHidden = !isConnected
         
-        // Hide/show Info and Settings submenus
-        menu.item(withTag: MenuTag.infoSubmenu.rawValue)?.isHidden = !isConnected
+        // Hide/show Advanced Settings submenu
         menu.item(withTag: MenuTag.settingsSubmenu.rawValue)?.isHidden = !isConnected
         
         // Hide/show Paired Devices header and items
@@ -929,8 +918,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func updateInfoSubmenu(firmware: String?, codec: String?, vendorId: String?, productId: String?, services: String?, serial: String?) {
         guard let menu = statusItem?.menu,
-              let infoItem = menu.item(withTag: MenuTag.infoSubmenu.rawValue),
-              let submenu = infoItem.submenu else { return }
+              let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
+              let submenu = settingsItem.submenu else { return }
         
         submenu.item(withTag: 401)?.title = "Firmware: \(firmware ?? "Unknown")"
         submenu.item(withTag: 402)?.title = "Audio Codec: \(codec ?? "Unknown")"
@@ -1820,8 +1809,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func updateSerialInMenu(_ serial: String) {
         guard let menu = statusItem?.menu,
-              let infoItem = menu.item(withTag: MenuTag.infoSubmenu.rawValue),
-              let submenu = infoItem.submenu else { return }
+              let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
+              let submenu = settingsItem.submenu else { return }
         submenu.item(withTag: 405)?.title = "Serial Number: \(serial)"
     }
     
@@ -1829,7 +1818,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         guard let menu = statusItem?.menu,
               let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
               let settingsSubmenu = settingsItem.submenu,
-              let languageItem = settingsSubmenu.item(at: 0),
+              let languageItem = settingsSubmenu.item(at: 8),
               let languageSubmenu = languageItem.submenu else { return }
         
         for item in languageSubmenu.items {
@@ -1841,7 +1830,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         guard let menu = statusItem?.menu,
               let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
               let settingsSubmenu = settingsItem.submenu,
-              let vpItem = settingsSubmenu.item(at: 1),
+              let vpItem = settingsSubmenu.item(at: 9),
               let vpSubmenu = vpItem.submenu else { return }
         
         vpSubmenu.item(withTag: 501)?.state = on ? .on : .off
