@@ -326,13 +326,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         item.isEnabled = false
         
-        // Use a custom view to ensure black text and left alignment
-        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        // Use a custom view to match Apple's native style
+        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 280, height: 20))
         
         let label = NSTextField(labelWithString: title)
-        label.font = NSFont.systemFont(ofSize: 13, weight: .bold)
+        label.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
         label.textColor = .black
-        label.frame = NSRect(x: 20, y: 2, width: 250, height: 18)
+        label.frame = NSRect(x: 14, y: 1, width: 250, height: 16)
         containerView.addSubview(label)
         
         item.view = containerView
