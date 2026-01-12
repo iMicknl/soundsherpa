@@ -324,10 +324,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 if let output = String(data: data, encoding: .utf8) {
                     DispatchQueue.main.async {
                         self?.parseBoseInfoFromSystemProfiler(output)
+                        
+                        // Fetch device info after parsing completes (deviceAddress is now set)
+                        self?.detectNoiseCancellationStatusAsync()
                     }
-                    
-                    // Try to detect noise cancellation status in background
-                    self?.detectNoiseCancellationStatusAsync()
                 } else {
                     print("Failed to get system profiler output")
                     DispatchQueue.main.async {
@@ -617,11 +617,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     ///   - expectedPrefix: The first 2 bytes expected in the response (command echo)
     ///   - timeout: How long to wait for the response
     /// - Returns: The response buffer, or empty if failed/timeout
-    private func sendCommandAndWait(command: [UInt8], expectedPrefix: [UInt8], timeout: TimeInterval = 2.0) -> [UInt8] {
+    private func sendCommandAndWait(command: [UInt8], expectedPrefix: [UInt8], timeout: TimeInterval = 0.5) -> [UInt8] {
         guard let channel = rfcommChannel, channel.isOpen() else { return [] }
-        
-        // Drain any pending data first by waiting briefly
-        Thread.sleep(forTimeInterval: 0.05)
         
         // Set up for new command
         responseLock.lock()
@@ -662,18 +659,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Get battery level
         fetchBatteryLevel()
         
-        // Small delay between commands
-        Thread.sleep(forTimeInterval: 0.1)
-        
         // Get serial number
         fetchSerialNumber()
         
-        Thread.sleep(forTimeInterval: 0.1)
-        
         // Get device status (includes NC, language, etc.)
         fetchDeviceStatus()
-        
-        Thread.sleep(forTimeInterval: 0.1)
         
         // Get paired devices
         fetchPairedDevices()
@@ -723,8 +713,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let deviceIdCommand: [UInt8] = [0x00, 0x03, 0x01, 0x00]
         _ = sendCommandAndWait(command: deviceIdCommand, expectedPrefix: [0x00, 0x03])
         
-        Thread.sleep(forTimeInterval: 0.1)
-        
         // GET_DEVICE_STATUS_SEND: [0x01, 0x01, 0x05, 0x00]
         // This command returns multiple packets with different prefixes (0x01, 0x03), (0x01, 0x06), (0x01, 0x0b)
         // We need to collect all of them
@@ -752,12 +740,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         print("Sent device status command")
         
         // Wait for first response
-        _ = responseSemaphore?.wait(timeout: .now() + 2.0)
+        _ = responseSemaphore?.wait(timeout: .now() + 0.5)
         
         // Wait for additional responses (device status comes in multiple packets)
+        // Use shorter timeouts since packets arrive quickly if they're coming
         for _ in 0..<5 {
             responseSemaphore = DispatchSemaphore(value: 0)
-            let waitResult = responseSemaphore?.wait(timeout: .now() + 0.5)
+            let waitResult = responseSemaphore?.wait(timeout: .now() + 0.15)
             if waitResult == .timedOut {
                 break
             }
