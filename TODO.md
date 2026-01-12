@@ -1,4 +1,3 @@
 - Only show the menu bar when it is connected?
 - Make more modular (support multiple headphones)
-- Make more airpods like
 - Can this be added to the official menu??
