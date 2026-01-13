@@ -81,3 +81,5 @@ Currently optimized for:
 - Bose QC35
 - Bose QC35 II
 - Other Bose headphones may work with limited functionality
+
+https://blog.davidv.dev/posts/reverse-engineering-the-bose-qc35-bluetooth-protocol/
