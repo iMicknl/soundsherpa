@@ -2,19 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "HeadphoneBattery",
+    name: "SoundSherpa",
     platforms: [
         .macOS(.v13)
     ],
     products: [
         .executable(
-            name: "HeadphoneBattery",
-            targets: ["HeadphoneBattery"]
+            name: "SoundSherpa",
+            targets: ["SoundSherpa"]
         ),
     ],
     targets: [
         .executableTarget(
-            name: "HeadphoneBattery",
+            name: "SoundSherpa",
             dependencies: []
         ),
     ]

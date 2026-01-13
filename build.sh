@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "Building Headphone Battery Monitor..."
+echo "Building SoundSherpa..."
 swift build -c release
 
 if [ $? -ne 0 ]; then
@@ -10,7 +10,7 @@ fi
 
 echo "Creating app bundle..."
 
-APP_NAME="HeadphoneBattery"
+APP_NAME="SoundSherpa"
 APP_BUNDLE="$APP_NAME.app"
 CONTENTS="$APP_BUNDLE/Contents"
 MACOS="$CONTENTS/MacOS"

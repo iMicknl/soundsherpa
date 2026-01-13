@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>Headphone Battery</string>
+    <string>SoundSherpa</string>
     <key>CFBundleIdentifier</key>
-    <string>com.example.headphonebattery</string>
+    <string>nl.imick.soundsherap</string>
     <key>CFBundleName</key>
-    <string>HeadphoneBattery</string>
+    <string>SoundSherpa</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -17,8 +17,8 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>This app needs Bluetooth access to monitor your headphone battery level.</string>
+    <string>SoundSherpa needs Bluetooth access to monitor your headphone battery level and control settings.</string>
     <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>This app needs Bluetooth access to connect to your headphones and monitor battery level.</string>
+    <string>SoundSherpa needs Bluetooth access to connect to your headphones and monitor battery level.</string>
 </dict>
 </plist>

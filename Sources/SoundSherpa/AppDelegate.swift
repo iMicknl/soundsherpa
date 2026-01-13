@@ -453,7 +453,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             image?.isTemplate = true
             button.image = image
             button.imagePosition = .imageOnly
-            button.toolTip = "Headphone Battery Monitor"
+            button.toolTip = "SoundSherpa"
         }
         
         setupMenu()
@@ -527,6 +527,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let settingsSubmenu = createSettingsSubmenu()
         settingsItem.submenu = settingsSubmenu
         menu.addItem(settingsItem)
+        
+        // === ABOUT SOUNDSHERPA ===
+        let aboutItem = NSMenuItem(title: "About SoundSherpa", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
         
         menu.addItem(NSMenuItem.separator())
         
@@ -969,7 +974,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                     let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                     if let configuredImage = headphoneImage.withSymbolConfiguration(config) {
                         // Tint the icon dark
-                        let tintedImage = NSImage(size: configuredImage.size, flipped: false) { tintRect in
+                        let _ = NSImage(size: configuredImage.size, flipped: false) { tintRect in
                             NSColor(white: 0.35, alpha: 1.0).set()
                             configuredImage.draw(in: tintRect, from: .zero, operation: .destinationIn, fraction: 1.0)
                             return true
@@ -2579,6 +2584,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
+    }
+    
+    @objc private func showAbout() {
+        let alert = NSAlert()
+        alert.messageText = "SoundSherpa"
+        alert.informativeText = "Smart controls for non-Apple headphones\n\nSoundSherpa brings the Control Center experience to all headphones, not just Apple ones. Manage noise cancellation, battery, connections, and device switching from your menu bar. No more guessing. No more digging through menus.\n\nVersion 1.0"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
     
     // MARK: - Async Helpers
