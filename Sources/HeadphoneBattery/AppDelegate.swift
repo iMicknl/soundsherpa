@@ -709,24 +709,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         circleView.layer?.cornerRadius = circleSize / 2
         containerView.addSubview(circleView)
         
-        // Headphone icon (white when connected)
-        let iconSize: CGFloat = 20
+        // Headphone icon (white when connected) - centered in circle
+        let iconSize: CGFloat = 18
         let iconX = circleX + (circleSize - iconSize) / 2
         let iconY = circleY + (circleSize - iconSize) / 2
         let iconView = NSImageView(frame: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
+        iconView.imageAlignment = .alignCenter
         if let image = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones") {
-            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+            let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
             iconView.contentTintColor = .white
         }
         containerView.addSubview(iconView)
         
-        // Device name label
+        // Device name label - vertically aligned with circle center when no battery, or upper half when battery shown
         let textX: CGFloat = circleX + circleSize + 10
         let nameLabel = NSTextField(labelWithString: name)
         nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         nameLabel.textColor = .labelColor
-        nameLabel.frame = NSRect(x: textX, y: battery != nil ? 26 : 7, width: 200, height: 18)
+        
+        if battery != nil {
+            // Two-line layout: name on top, battery below, both centered relative to circle
+            let nameY = circleY + circleSize / 2  // Upper half of circle
+            nameLabel.frame = NSRect(x: textX, y: nameY, width: 200, height: 18)
+        } else {
+            // Single line: vertically centered with circle
+            let nameY = circleY + (circleSize - 18) / 2
+            nameLabel.frame = NSRect(x: textX, y: nameY, width: 200, height: 18)
+        }
         containerView.addSubview(nameLabel)
         
         // Battery label with icon (if available)
@@ -736,14 +746,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             batteryLabel.font = NSFont.systemFont(ofSize: 11)
             batteryLabel.textColor = .secondaryLabelColor
             batteryLabel.sizeToFit()
-            let batteryY: CGFloat = 8
-            batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: 16)
+            
+            // Position battery text in lower half of circle area
+            let batteryLabelHeight: CGFloat = 14
+            let batteryY = circleY + (circleSize / 2 - batteryLabelHeight) / 2
+            batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: batteryLabelHeight)
             containerView.addSubview(batteryLabel)
             
-            // Battery icon - moved left and vertically centered
-            let iconHeight: CGFloat = 11
-            let batteryIconY = batteryY + (16 - iconHeight) / 2 + 2
-            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width - 1, y: batteryIconY, width: 20, height: iconHeight))
+            // Battery icon - vertically centered with battery text
+            let batteryIconSize: CGFloat = 14
+            let batteryIconY = batteryY + (batteryLabelHeight - batteryIconSize) / 2
+            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: batteryIconY, width: 20, height: batteryIconSize))
+            batteryIconView.imageAlignment = .alignCenter
             let batteryIconName = batteryIconNameForLevel(battery)
             if let batteryImage = NSImage(systemSymbolName: batteryIconName, accessibilityDescription: "Battery") {
                 let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
@@ -986,24 +1000,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         circleView.layer?.cornerRadius = circleSize / 2
         containerView.addSubview(circleView)
         
-        // Headphone icon (white)
-        let iconSize: CGFloat = 20
+        // Headphone icon (white) - centered in circle
+        let iconSize: CGFloat = 18
         let iconX = circleX + (circleSize - iconSize) / 2
         let iconY = circleY + (circleSize - iconSize) / 2
         let iconView = NSImageView(frame: NSRect(x: iconX, y: iconY, width: iconSize, height: iconSize))
+        iconView.imageAlignment = .alignCenter
         if let image = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones") {
-            let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
+            let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
             iconView.image = image.withSymbolConfiguration(config)
             iconView.contentTintColor = .white
         }
         containerView.addSubview(iconView)
         
-        // Device name label
+        // Device name label - vertically aligned with circle center
         let textX: CGFloat = circleX + circleSize + 10
         let nameLabel = NSTextField(labelWithString: name)
         nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         nameLabel.textColor = .labelColor
-        nameLabel.frame = NSRect(x: textX, y: battery != nil ? 26 : 7, width: 200, height: 18)
+        
+        if battery != nil {
+            // Two-line layout: name on top, battery below, both centered relative to circle
+            let nameY = circleY + circleSize / 2
+            nameLabel.frame = NSRect(x: textX, y: nameY, width: 200, height: 18)
+        } else {
+            // Single line: vertically centered with circle
+            let nameY = circleY + (circleSize - 18) / 2
+            nameLabel.frame = NSRect(x: textX, y: nameY, width: 200, height: 18)
+        }
         containerView.addSubview(nameLabel)
         
         // Battery label with icon (if available)
@@ -1013,14 +1037,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             batteryLabel.font = NSFont.systemFont(ofSize: 11)
             batteryLabel.textColor = .secondaryLabelColor
             batteryLabel.sizeToFit()
-            let batteryY: CGFloat = 8
-            batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: 16)
+            
+            // Position battery text in lower half of circle area
+            let batteryLabelHeight: CGFloat = 14
+            let batteryY = circleY + (circleSize / 2 - batteryLabelHeight) / 2
+            batteryLabel.frame = NSRect(x: textX, y: batteryY, width: batteryLabel.frame.width, height: batteryLabelHeight)
             containerView.addSubview(batteryLabel)
             
-            // Battery icon - moved left and vertically centered
-            let iconHeight: CGFloat = 11
-            let iconY = batteryY + (16 - iconHeight) / 2 + 2
-            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width - 1, y: iconY, width: 20, height: iconHeight))
+            // Battery icon - vertically centered with battery text
+            let batteryIconSize: CGFloat = 14
+            let batteryIconY = batteryY + (batteryLabelHeight - batteryIconSize) / 2
+            let batteryIconView = NSImageView(frame: NSRect(x: textX + batteryLabel.frame.width + 2, y: batteryIconY, width: 20, height: batteryIconSize))
+            batteryIconView.imageAlignment = .alignCenter
             let batteryIconName = batteryIconNameForLevel(battery)
             if let batteryImage = NSImage(systemSymbolName: batteryIconName, accessibilityDescription: "Battery") {
                 let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
