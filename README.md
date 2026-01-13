@@ -1,3 +1,5 @@
+![icons](icons.png)
+
 # SoundSherpa
 
 **Smart controls for non-Apple headphones**
