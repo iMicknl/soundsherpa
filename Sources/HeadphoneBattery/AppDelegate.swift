@@ -1333,6 +1333,46 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private func checkForBoseDevices() {
         print("Checking for Bose devices...")
         
+        // Fast path: Check IOBluetooth paired devices first (much faster than system_profiler)
+        if let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] {
+            for device in pairedDevices {
+                if let name = device.name, name.lowercased().contains("bose"), device.isConnected() {
+                    print("Fast path: Found connected Bose device: \(name)")
+                    
+                    // Update menu immediately with basic info
+                    let info = HeadphoneInfo(
+                        name: name,
+                        batteryLevel: nil,
+                        isConnected: true,
+                        firmwareVersion: nil,
+                        noiseCancellationEnabled: nil,
+                        audioCodec: nil,
+                        vendorId: nil,
+                        productId: nil,
+                        services: nil,
+                        serialNumber: nil,
+                        language: nil,
+                        voicePromptsEnabled: nil,
+                        selfVoiceLevel: nil,
+                        pairedDevices: nil,
+                        pairedDevicesCount: nil,
+                        connectedDevicesCount: nil
+                    )
+                    
+                    self.deviceAddress = device.addressString
+                    
+                    DispatchQueue.main.async {
+                        self.updateMenuWithHeadphoneInfo(info)
+                    }
+                    
+                    // Start fetching detailed data via RFCOMM
+                    self.detectNoiseCancellationStatusAsync()
+                    return
+                }
+            }
+        }
+        
+        // Slow path fallback: Use system_profiler for more detailed info
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let task = Process()
             task.launchPath = "/usr/sbin/system_profiler"
@@ -1379,6 +1419,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             
             if self.connectToBoseDeviceSync(address: deviceAddr) {
                 print(">>> Connection successful, initializing Bose protocol...")
+                
+                // Show full menu immediately since we're connected
+                DispatchQueue.main.async {
+                    self.updateMenuItemsVisibility(isConnected: true)
+                }
                 
                 if self.initBoseConnection() {
                     print(">>> Init successful, fetching device info...")
@@ -1590,10 +1635,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             fetchBatteryLevel()
             fetchSerialNumber()
             fetchDeviceStatus()
-            fetchPairedDevices()
             fetchAutoOffStatus()
             fetchButtonActionStatus()
             markDataAsFetched()
+            
+            // Fetch paired devices last (it's slower due to per-device status queries)
+            fetchPairedDevices()
         } else {
             // Use cached data - just update the menu with what we have
             DispatchQueue.main.async {
@@ -1770,38 +1817,42 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             
             print("Total paired devices: \(numDevicesTotal)")
             
-            var devices: [PairedDeviceInfo] = []
-            var offset = 5  // Skip header bytes [0x04, 0x04, 0x03, num_bytes, connected_byte]
+            var addresses: [(address: String, bytes: [UInt8])] = []
+            var offset = 5  // Skip header bytes
             
-            for i in 0..<numDevicesTotal {
+            // First pass: collect all addresses quickly
+            for _ in 0..<numDevicesTotal {
                 if offset + 6 <= response.count {
                     let addressBytes = Array(response[offset..<(offset + 6)])
                     let address = addressBytes.map { String(format: "%02X", $0) }.joined(separator: ":")
-                    
-                    // Query actual device status using GET_DEVICE_INFO
-                    let status = getDeviceStatus(address: address)
-                    let isConnected = (status == .connected || status == .thisDevice)
-                    let isCurrentDevice = (status == .thisDevice)
-                    
-                    var deviceName: String
-                    if isCurrentDevice {
-                        deviceName = Host.current().localizedName ?? getDeviceNameForAddress(address) ?? address
-                    } else {
-                        deviceName = getDeviceNameForAddress(address) ?? address
-                    }
-                    
-                    print("Device \(i): \(address) - \(deviceName) - status: \(status) - connected: \(isConnected), current: \(isCurrentDevice)")
-                    
-                    let deviceInfo = PairedDeviceInfo(
-                        address: address,
-                        name: deviceName,
-                        isConnected: isConnected,
-                        isCurrentDevice: isCurrentDevice
-                    )
-                    devices.append(deviceInfo)
-                    
+                    addresses.append((address: address, bytes: addressBytes))
                     offset += 6
                 }
+            }
+            
+            // Query each device's status (this is the slow part)
+            var devices: [PairedDeviceInfo] = []
+            for (address, _) in addresses {
+                let status = getDeviceStatus(address: address)
+                let isConnected = (status == .connected || status == .thisDevice)
+                let isCurrentDevice = (status == .thisDevice)
+                
+                var deviceName: String
+                if isCurrentDevice {
+                    deviceName = Host.current().localizedName ?? getDeviceNameForAddress(address) ?? address
+                } else {
+                    deviceName = getDeviceNameForAddress(address) ?? address
+                }
+                
+                print("Device: \(address) - \(deviceName) - status: \(status)")
+                
+                let deviceInfo = PairedDeviceInfo(
+                    address: address,
+                    name: deviceName,
+                    isConnected: isConnected,
+                    isCurrentDevice: isCurrentDevice
+                )
+                devices.append(deviceInfo)
             }
             
             DispatchQueue.main.async {
