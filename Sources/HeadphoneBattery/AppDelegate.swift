@@ -943,19 +943,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         guard let menu = statusItem?.menu,
               let deviceItem = menu.item(withTag: MenuTag.deviceHeader.rawValue) else { return }
         
-        // When disconnected, use a standard menu item (clickable) with styled appearance
+        // When disconnected, use standard menu item for proper hover behavior
         if !isConnected {
-            deviceItem.view = nil  // Remove custom view to make it clickable
-            deviceItem.title = "     " + name  // Indent for icon space
+            deviceItem.view = nil  // Remove custom view to enable hover
             deviceItem.action = #selector(connectToDevice)
             deviceItem.target = self
             deviceItem.isEnabled = true
             
-            // Create a composite image with grey circle and black headphone icon
+            // Use attributed string for regular weight text
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 13, weight: .regular)
+            ]
+            deviceItem.attributedTitle = NSAttributedString(string: name, attributes: attributes)
+            
+            // Create a composite image with light grey circle and dark headphone icon
             let imageSize = NSSize(width: 32, height: 32)
             let compositeImage = NSImage(size: imageSize, flipped: false) { rect in
-                // Draw grey circle
-                NSColor.systemGray.setFill()
+                // Draw light grey circle (like Apple native dialogs)
+                NSColor(white: 0.85, alpha: 1.0).setFill()
                 let circlePath = NSBezierPath(ovalIn: rect)
                 circlePath.fill()
                 
@@ -963,6 +968,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 if let headphoneImage = NSImage(systemSymbolName: "headphones.over.ear", accessibilityDescription: "Headphones") {
                     let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
                     if let configuredImage = headphoneImage.withSymbolConfiguration(config) {
+                        // Tint the icon dark
+                        let tintedImage = NSImage(size: configuredImage.size, flipped: false) { tintRect in
+                            NSColor(white: 0.35, alpha: 1.0).set()
+                            configuredImage.draw(in: tintRect, from: .zero, operation: .destinationIn, fraction: 1.0)
+                            return true
+                        }
                         let iconSize = NSSize(width: 18, height: 18)
                         let iconRect = NSRect(
                             x: (rect.width - iconSize.width) / 2,
