@@ -5,7 +5,7 @@
     <key>CFBundleDisplayName</key>
     <string>SoundSherpa</string>
     <key>CFBundleIdentifier</key>
-    <string>nl.imick.soundsherap</string>
+    <string>nl.imick.soundsherpa</string>
     <key>CFBundleName</key>
     <string>SoundSherpa</string>
     <key>CFBundleVersion</key>
@@ -19,6 +19,6 @@
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>SoundSherpa needs Bluetooth access to monitor your headphone battery level and control settings.</string>
     <key>NSBluetoothPeripheralUsageDescription</key>
-    <string>SoundSherpa needs Bluetooth access to connect to your headphones and monitor battery level.</string>
+    <string>SoundSherpa needs Bluetooth access to connect to your headphones.</string>
 </dict>
 </plist>
