@@ -2295,7 +2295,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     
     private func updateMenuWithNoDevice() {
         let info = HeadphoneInfo(
-            name: "No Bose Device Found",
+            name: "No Bose device connected",
             batteryLevel: nil,
             isConnected: false,
             firmwareVersion: nil,
