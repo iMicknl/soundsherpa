@@ -1787,11 +1787,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let command: [UInt8] = [0x01, 0x09, 0x03, 0x04, 0x10, 0x04, 0x00, 0x07]
         let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x09])
         
+        print("Button Action Response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: ", "))")
+        
         if response.count >= 5 && response[0] == 0x01 && response[1] == 0x09 && response[2] == 0x03 {
             let buttonActionValue = response[4]
+            print("Button Action Value: 0x\(String(format: "%02X", buttonActionValue))")
             DispatchQueue.main.async {
                 self.updateButtonActionSelection(level: buttonActionValue)
             }
+        } else {
+            print("Button Action Response validation failed - count: \(response.count)")
         }
     }
     
