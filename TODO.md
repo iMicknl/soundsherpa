@@ -3,3 +3,4 @@
     How can they change this?
 - Make more modular (support multiple headphones)
 - Small UI tweaks (better alignment)
+- Add to control bar (or widget)?

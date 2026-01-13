@@ -2587,12 +2587,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     @objc private func showAbout() {
+        print("showAbout method called")
+        
         let alert = NSAlert()
         alert.messageText = "SoundSherpa"
         alert.informativeText = "Smart controls for non-Apple headphones\n\nSoundSherpa brings the Control Center experience to all headphones, not just Apple ones. Manage noise cancellation, battery, connections, and device switching from your menu bar. No more guessing. No more digging through menus.\n\nVersion 1.0"
         alert.alertStyle = .informational
+        
+        // Add buttons - first button added is the default (rightmost, blue)
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        alert.addButton(withTitle: "Visit Website")
+        
+        // Bring app to front and show alert in a window
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        
+        // Run modal - the first button added is automatically the default (blue) button
+        let response = alert.runModal()
+        
+        // Return to accessory app mode
+        NSApp.setActivationPolicy(.accessory)
+        
+        // Handle button responses
+        if response == .alertSecondButtonReturn { // Visit Website button
+            if let url = URL(string: "https://soundsherpa.app") {
+                NSWorkspace.shared.open(url)
+            }
+        }
     }
     
     // MARK: - Async Helpers
