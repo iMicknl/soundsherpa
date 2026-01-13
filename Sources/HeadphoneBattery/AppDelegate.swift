@@ -1730,6 +1730,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         case thisDevice = 0x03
     }
     
+    // Query individual device status using GET_DEVICE_INFO command
+    private func getDeviceStatus(address: String) -> DeviceStatus {
+        guard let addressBytes = addressStringToBytes(address) else {
+            return .disconnected
+        }
+        
+        // GET_DEVICE_INFO: [0x04, 0x05, 0x01, 0x06, <6 bytes address>]
+        var command: [UInt8] = [0x04, 0x05, 0x01, 0x06]
+        command.append(contentsOf: addressBytes)
+        
+        let response = sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x05, 0x03], timeout: 1.0)
+        
+        // Response: [0x04, 0x05, 0x03, length, <6 bytes address>, status_byte, ...]
+        if response.count >= 11 && response[0] == 0x04 && response[1] == 0x05 && response[2] == 0x03 {
+            let statusByte = response[10]  // After header(4) + address(6)
+            print("Device \(address) status byte: 0x\(String(format: "%02X", statusByte))")
+            return DeviceStatus(rawValue: statusByte) ?? .disconnected
+        }
+        
+        return .disconnected
+    }
+    
     // Number of connected devices
     private enum DevicesConnected: UInt8 {
         case one = 0x01
@@ -1744,42 +1766,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         if response.count >= 5 && response[0] == 0x04 && response[1] == 0x04 && response[2] == 0x03 {
             let numDevicesBytes = Int(response[3])
-            let numDevicesTotal = numDevicesBytes / 6  // Total including current device
-            let connectedByte = response[4]
+            let numDevicesTotal = numDevicesBytes / 6
             
-            // Parse connected count: DC_ONE = 0x01 (1 connected), DC_TWO = 0x03 (2 connected)
-            let numConnected: Int
-            switch connectedByte {
-            case 0x01: numConnected = 1
-            case 0x03: numConnected = 2
-            default: numConnected = Int(connectedByte)
-            }
-            
-            print("Total devices: \(numDevicesTotal), Connected: \(numConnected) (byte: 0x\(String(format: "%02X", connectedByte)))")
+            print("Total paired devices: \(numDevicesTotal)")
             
             var devices: [PairedDeviceInfo] = []
-            var offset = 5
+            var offset = 5  // Skip header bytes [0x04, 0x04, 0x03, num_bytes, connected_byte]
             
-            // The devices are listed in order: first is current device, then other connected devices, then disconnected
-            // So the first numConnected devices are connected
             for i in 0..<numDevicesTotal {
                 if offset + 6 <= response.count {
                     let addressBytes = Array(response[offset..<(offset + 6)])
                     let address = addressBytes.map { String(format: "%02X", $0) }.joined(separator: ":")
                     
+                    // Query actual device status using GET_DEVICE_INFO
+                    let status = getDeviceStatus(address: address)
+                    let isConnected = (status == .connected || status == .thisDevice)
+                    let isCurrentDevice = (status == .thisDevice)
+                    
                     var deviceName: String
-                    // First device is always the current device (the one we're connected from)
-                    if i == 0 {
+                    if isCurrentDevice {
                         deviceName = Host.current().localizedName ?? getDeviceNameForAddress(address) ?? address
                     } else {
                         deviceName = getDeviceNameForAddress(address) ?? address
                     }
                     
-                    // First device is "this device", devices 0 to numConnected-1 are connected
-                    let isCurrentDevice = (i == 0)
-                    let isConnected = (i < numConnected)
-                    
-                    print("Device \(i): \(address) - \(deviceName) - connected: \(isConnected), current: \(isCurrentDevice)")
+                    print("Device \(i): \(address) - \(deviceName) - status: \(status) - connected: \(isConnected), current: \(isCurrentDevice)")
                     
                     let deviceInfo = PairedDeviceInfo(
                         address: address,
@@ -1794,7 +1805,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             }
             
             DispatchQueue.main.async {
-                self.updatePairedDevicesMenu(devices, totalCount: numDevicesTotal, connectedCount: numConnected)
+                let connectedCount = devices.filter { $0.isConnected }.count
+                self.updatePairedDevicesMenu(devices, totalCount: numDevicesTotal, connectedCount: connectedCount)
             }
         }
     }
