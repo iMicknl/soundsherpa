@@ -1590,6 +1590,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
         
         let waitResult = responseSemaphore?.wait(timeout: .now() + 5.0)
+        let _ = responseSemaphore  // Keep reference until after wait
         responseSemaphore = nil
         
         if waitResult == .timedOut {
@@ -1628,6 +1629,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
         
         _ = responseSemaphore?.wait(timeout: .now() + timeout)
+        let _ = responseSemaphore  // Keep reference until after wait
         responseSemaphore = nil
         
         responseLock.lock()
@@ -1724,7 +1726,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 break
             }
         }
+        let _ = responseSemaphore  // Keep reference until after wait
         responseSemaphore = nil
+        
+        responseLock.lock()
+        expectedResponsePrefix = []
+        responseLock.unlock()
         
         responseLock.lock()
         let statusResponse = responseBuffer
@@ -2010,8 +2017,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         if isExpectedResponse {
             responseBuffer.append(contentsOf: responseData)
+            let semaphore = responseSemaphore
             responseLock.unlock()
-            responseSemaphore?.signal()
+            semaphore?.signal()
         } else {
             responseLock.unlock()
         }
@@ -2596,6 +2604,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             }
             
             let waitResult = self.responseSemaphore?.wait(timeout: .now() + 2.0)
+            let _ = self.responseSemaphore  // Keep reference until after wait
             self.responseSemaphore = nil
             
             if waitResult == .timedOut {
