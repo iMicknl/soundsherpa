@@ -934,6 +934,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         submenu.addItem(NSMenuItem.separator())
         
+        // === PLUGIN DEBUG INFO ===
+        let pluginDebugHeader = createSectionHeader(title: "Plugin Debug Info")
+        pluginDebugHeader.tag = 406
+        submenu.addItem(pluginDebugHeader)
+        
+        let pluginIdItem = NSMenuItem(title: "Plugin: Unknown", action: nil, keyEquivalent: "")
+        pluginIdItem.isEnabled = false
+        pluginIdItem.tag = 407
+        submenu.addItem(pluginIdItem)
+        
+        let matchScoreItem = NSMenuItem(title: "Match Score: Unknown", action: nil, keyEquivalent: "")
+        matchScoreItem.isEnabled = false
+        matchScoreItem.tag = 408
+        submenu.addItem(matchScoreItem)
+        
+        let matchMethodItem = NSMenuItem(title: "Matched By: Unknown", action: nil, keyEquivalent: "")
+        matchMethodItem.isEnabled = false
+        matchMethodItem.tag = 409
+        submenu.addItem(matchMethodItem)
+        
+        let modelItem = NSMenuItem(title: "Model: Unknown", action: nil, keyEquivalent: "")
+        modelItem.isEnabled = false
+        modelItem.tag = 410
+        submenu.addItem(modelItem)
+        
+        submenu.addItem(NSMenuItem.separator())
+        
         let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshBattery), keyEquivalent: "r")
         refreshItem.target = self
         submenu.addItem(refreshItem)
@@ -1204,6 +1231,142 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         submenu.item(withTag: 403)?.title = "Device ID: \(deviceIdText)"
         submenu.item(withTag: 404)?.title = "Services: \(services ?? "Unknown")"
         submenu.item(withTag: 405)?.title = "Serial Number: \(serial ?? "Unknown")"
+    }
+    
+    private func updatePluginDebugInfo(pluginId: String?, pluginName: String?, matchScore: Int?, matchedBy: [String]?, model: String? = nil) {
+        guard let menu = statusItem?.menu,
+              let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
+              let submenu = settingsItem.submenu else { return }
+        
+        // Plugin ID and name
+        if let pluginId = pluginId, let pluginName = pluginName {
+            submenu.item(withTag: 407)?.title = "Plugin: \(pluginName) (\(pluginId))"
+        } else {
+            submenu.item(withTag: 407)?.title = "Plugin: None (Unsupported)"
+        }
+        
+        // Match score
+        if let score = matchScore {
+            submenu.item(withTag: 408)?.title = "Match Score: \(score)/100"
+        } else {
+            submenu.item(withTag: 408)?.title = "Match Score: N/A"
+        }
+        
+        // Match method(s)
+        if let methods = matchedBy, !methods.isEmpty {
+            submenu.item(withTag: 409)?.title = "Matched By: \(methods.joined(separator: ", "))"
+        } else {
+            submenu.item(withTag: 409)?.title = "Matched By: None"
+        }
+        
+        // Model
+        if let model = model {
+            submenu.item(withTag: 410)?.title = "Model: \(model)"
+        } else {
+            submenu.item(withTag: 410)?.title = "Model: Unknown"
+        }
+    }
+    
+    /// Updates plugin debug info based on the current device
+    /// This method checks the PluginArchitectureManager for active plugin info,
+    /// or falls back to legacy Bose detection info
+    private func updatePluginDebugInfoForDevice(_ info: HeadphoneInfo) {
+        guard info.isConnected else {
+            // Clear debug info when disconnected
+            updatePluginDebugInfo(pluginId: nil, pluginName: nil, matchScore: nil, matchedBy: nil, model: nil)
+            return
+        }
+        
+        // Check if we have an active plugin from the PluginArchitectureManager
+        let manager = PluginArchitectureManager.shared
+        if let plugin = manager.activePlugin, let device = manager.connectedDevice {
+            // Get match score from the plugin
+            let score = plugin.canHandle(device: device)
+            
+            // Determine what criteria matched
+            var matchedBy: [String] = []
+            
+            // Check vendor/product ID match
+            if device.vendorId != nil && device.productId != nil {
+                matchedBy.append("Vendor/Product ID")
+            }
+            
+            // Check service UUIDs
+            if !device.serviceUUIDs.isEmpty {
+                matchedBy.append("Service UUIDs")
+            }
+            
+            // Check name pattern (if device name contains plugin-related keywords)
+            let deviceNameLower = device.name.lowercased()
+            if deviceNameLower.contains("bose") || deviceNameLower.contains("sony") ||
+               deviceNameLower.contains("qc") || deviceNameLower.contains("wh-1000") {
+                matchedBy.append("Name Pattern")
+            }
+            
+            // Check MAC prefix
+            if !device.address.isEmpty {
+                matchedBy.append("MAC Address")
+            }
+            
+            // Get model from plugin if it's a Bose plugin
+            var model: String? = nil
+            if let bosePlugin = plugin as? BosePlugin {
+                model = bosePlugin.deviceModel?.rawValue
+            }
+            
+            updatePluginDebugInfo(
+                pluginId: plugin.pluginId,
+                pluginName: plugin.displayName,
+                matchScore: score,
+                matchedBy: matchedBy.isEmpty ? ["Auto-detected"] : matchedBy,
+                model: model
+            )
+        } else {
+            // Legacy mode - detect model from device name
+            let model = detectBoseModelFromName(info.name)
+            
+            var matchedBy: [String] = []
+            
+            // Check what we used to identify the device
+            if info.vendorId != nil && info.productId != nil {
+                matchedBy.append("Vendor/Product ID")
+            }
+            if info.services != nil {
+                matchedBy.append("Services")
+            }
+            if info.name.lowercased().contains("bose") {
+                matchedBy.append("Name Pattern")
+            }
+            
+            updatePluginDebugInfo(
+                pluginId: "legacy.bose",
+                pluginName: "Legacy Bose Handler",
+                matchScore: 100, // Legacy handler is a direct match
+                matchedBy: matchedBy.isEmpty ? ["Name Pattern"] : matchedBy,
+                model: model
+            )
+        }
+    }
+    
+    /// Detect Bose model from device name
+    private func detectBoseModelFromName(_ name: String) -> String? {
+        let lowercaseName = name.lowercased()
+        
+        if lowercaseName.contains("qc ultra") || lowercaseName.contains("quietcomfort ultra") {
+            return "QC Ultra"
+        } else if lowercaseName.contains("qc45") || lowercaseName.contains("quietcomfort 45") {
+            return "QC45"
+        } else if lowercaseName.contains("qc35 ii") || lowercaseName.contains("qc35ii") || lowercaseName.contains("quietcomfort 35 ii") {
+            return "QC35 II"
+        } else if lowercaseName.contains("qc35") || lowercaseName.contains("quietcomfort 35") {
+            return "QC35"
+        } else if lowercaseName.contains("nc 700") || lowercaseName.contains("nc700") || lowercaseName.contains("noise cancelling headphones 700") {
+            return "NC 700"
+        } else if lowercaseName.contains("bose") {
+            return "Unknown Bose Model"
+        }
+        
+        return nil
     }
     
     private func updatePairedDevicesMenu(_ devices: [PairedDeviceInfo], totalCount: Int, connectedCount: Int) {
@@ -2305,6 +2468,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             services: info.services,
             serial: info.serialNumber
         )
+        
+        // Update Plugin Debug Info
+        updatePluginDebugInfoForDevice(info)
         
         // Update tooltip
         if let button = statusItem?.button {
