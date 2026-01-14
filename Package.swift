@@ -12,10 +12,20 @@ let package = Package(
             targets: ["SoundSherpa"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/typelift/SwiftCheck.git", from: "0.12.0"),
+    ],
     targets: [
         .executableTarget(
             name: "SoundSherpa",
             dependencies: []
+        ),
+        .testTarget(
+            name: "SoundSherpaTests",
+            dependencies: [
+                "SoundSherpa",
+                "SwiftCheck",
+            ]
         ),
     ]
 )
