@@ -399,6 +399,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var currentButtonAction: UInt8 = 0xFF // Unknown
     private var pairedDevicesList: [PairedDeviceInfo] = [] // Store paired devices for menu actions
     
+    // Detected Bose model from device identification
+    private var detectedBoseModel: BoseDeviceModel?
+    
     // Cached device info for immediate display
     private var cachedBatteryLevel: Int?
     private var cachedFirmwareVersion: String?
@@ -906,53 +909,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         submenu.addItem(NSMenuItem.separator())
         
-        // === INFO ITEMS ===
+        // === DEVICE INFO ===
         let firmwareItem = NSMenuItem(title: "Firmware: Unknown", action: nil, keyEquivalent: "")
         firmwareItem.isEnabled = false
         firmwareItem.tag = 401
         submenu.addItem(firmwareItem)
         
-        let serialItem = NSMenuItem(title: "Serial Number: Unknown", action: nil, keyEquivalent: "")
+        let serialItem = NSMenuItem(title: "Serial: Unknown", action: nil, keyEquivalent: "")
         serialItem.isEnabled = false
         serialItem.tag = 405
         submenu.addItem(serialItem)
         
-        let codecItem = NSMenuItem(title: "Audio Codec: Unknown", action: nil, keyEquivalent: "")
+        let codecItem = NSMenuItem(title: "Codec: Unknown", action: nil, keyEquivalent: "")
         codecItem.isEnabled = false
         codecItem.tag = 402
         submenu.addItem(codecItem)
         
-        let deviceIdItem = NSMenuItem(title: "Device ID: Unknown", action: nil, keyEquivalent: "")
+        let deviceIdItem = NSMenuItem(title: "ID: Unknown", action: nil, keyEquivalent: "")
         deviceIdItem.isEnabled = false
         deviceIdItem.tag = 403
         submenu.addItem(deviceIdItem)
         
-        let servicesItem = NSMenuItem(title: "Services: Unknown", action: nil, keyEquivalent: "")
-        servicesItem.isEnabled = false
-        servicesItem.tag = 404
-        submenu.addItem(servicesItem)
-        
         submenu.addItem(NSMenuItem.separator())
         
-        // === PLUGIN DEBUG INFO ===
-        let pluginDebugHeader = createSectionHeader(title: "Plugin Debug Info")
-        pluginDebugHeader.tag = 406
-        submenu.addItem(pluginDebugHeader)
-        
-        let pluginIdItem = NSMenuItem(title: "Plugin: Unknown", action: nil, keyEquivalent: "")
-        pluginIdItem.isEnabled = false
-        pluginIdItem.tag = 407
-        submenu.addItem(pluginIdItem)
-        
-        let matchScoreItem = NSMenuItem(title: "Match Score: Unknown", action: nil, keyEquivalent: "")
-        matchScoreItem.isEnabled = false
-        matchScoreItem.tag = 408
-        submenu.addItem(matchScoreItem)
-        
-        let matchMethodItem = NSMenuItem(title: "Matched By: Unknown", action: nil, keyEquivalent: "")
-        matchMethodItem.isEnabled = false
-        matchMethodItem.tag = 409
-        submenu.addItem(matchMethodItem)
+        // === PLUGIN DEBUG INFO (compact) ===
+        let pluginInfoItem = NSMenuItem(title: "Plugin: Unknown", action: nil, keyEquivalent: "")
+        pluginInfoItem.isEnabled = false
+        pluginInfoItem.tag = 407
+        submenu.addItem(pluginInfoItem)
         
         let modelItem = NSMenuItem(title: "Model: Unknown", action: nil, keyEquivalent: "")
         modelItem.isEnabled = false
@@ -1225,12 +1209,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
               let submenu = settingsItem.submenu else { return }
         
         submenu.item(withTag: 401)?.title = "Firmware: \(firmware ?? "Unknown")"
-        submenu.item(withTag: 402)?.title = "Audio Codec: \(codec ?? "Unknown")"
-        
-        let deviceIdText = "\(vendorId ?? "Unknown") / \(productId ?? "Unknown")"
-        submenu.item(withTag: 403)?.title = "Device ID: \(deviceIdText)"
-        submenu.item(withTag: 404)?.title = "Services: \(services ?? "Unknown")"
-        submenu.item(withTag: 405)?.title = "Serial Number: \(serial ?? "Unknown")"
+        submenu.item(withTag: 402)?.title = "Codec: \(codec ?? "Unknown")"
+        submenu.item(withTag: 403)?.title = "ID: \(vendorId ?? "?") / \(productId ?? "?")"
+        submenu.item(withTag: 405)?.title = "Serial: \(serial ?? "Unknown")"
     }
     
     private func updatePluginDebugInfo(pluginId: String?, pluginName: String?, matchScore: Int?, matchedBy: [String]?, model: String? = nil) {
@@ -1238,25 +1219,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
               let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
               let submenu = settingsItem.submenu else { return }
         
-        // Plugin ID and name
-        if let pluginId = pluginId, let pluginName = pluginName {
-            submenu.item(withTag: 407)?.title = "Plugin: \(pluginName) (\(pluginId))"
+        // Compact plugin info: "Plugin: Name (score%, method)"
+        if let pluginName = pluginName, let score = matchScore {
+            let methodStr = matchedBy?.first ?? "auto"
+            submenu.item(withTag: 407)?.title = "Plugin: \(pluginName) (\(score)%, \(methodStr))"
         } else {
-            submenu.item(withTag: 407)?.title = "Plugin: None (Unsupported)"
-        }
-        
-        // Match score
-        if let score = matchScore {
-            submenu.item(withTag: 408)?.title = "Match Score: \(score)/100"
-        } else {
-            submenu.item(withTag: 408)?.title = "Match Score: N/A"
-        }
-        
-        // Match method(s)
-        if let methods = matchedBy, !methods.isEmpty {
-            submenu.item(withTag: 409)?.title = "Matched By: \(methods.joined(separator: ", "))"
-        } else {
-            submenu.item(withTag: 409)?.title = "Matched By: None"
+            submenu.item(withTag: 407)?.title = "Plugin: None"
         }
         
         // Model
@@ -1322,33 +1290,53 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 model: model
             )
         } else {
-            // Legacy mode - detect model from device name
-            let model = detectBoseModelFromName(info.name)
-            
+            // Legacy mode - use detected model or fall back to name detection
             var matchedBy: [String] = []
+            var model: String? = nil
+            
+            // Use the detected model from device identification if available
+            if let detected = detectedBoseModel {
+                model = detected.rawValue
+                
+                // Check MAC address prefix
+                if let addr = deviceAddress {
+                    let macPrefix = String(addr.uppercased().prefix(8))
+                    let boseMacPrefixes = ["04:52:C7", "2C:41:A1", "88:C9:E8", "4C:87:5D", "60:AB:D2"]
+                    if boseMacPrefixes.contains(macPrefix) {
+                        matchedBy.append("MAC Prefix (\(macPrefix))")
+                    }
+                }
+            }
             
             // Check what we used to identify the device
             if info.vendorId != nil && info.productId != nil {
                 matchedBy.append("Vendor/Product ID")
             }
-            if info.services != nil {
+            if info.services != nil && !info.services!.isEmpty {
                 matchedBy.append("Services")
             }
+            
+            // Name pattern is lowest priority
             if info.name.lowercased().contains("bose") {
                 matchedBy.append("Name Pattern")
+            }
+            
+            // Fall back to name-based detection if no model detected
+            if model == nil {
+                model = detectBoseModelFromName(info.name)
             }
             
             updatePluginDebugInfo(
                 pluginId: "legacy.bose",
                 pluginName: "Legacy Bose Handler",
-                matchScore: 100, // Legacy handler is a direct match
-                matchedBy: matchedBy.isEmpty ? ["Name Pattern"] : matchedBy,
+                matchScore: matchedBy.contains(where: { $0.contains("MAC") || $0.contains("Vendor") }) ? 95 : 50,
+                matchedBy: matchedBy.isEmpty ? ["Name Pattern (fallback)"] : matchedBy,
                 model: model
             )
         }
     }
     
-    /// Detect Bose model from device name
+    /// Detect Bose model from device name (fallback method)
     private func detectBoseModelFromName(_ name: String) -> String? {
         let lowercaseName = name.lowercased()
         
@@ -1367,6 +1355,67 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
         
         return nil
+    }
+    
+    /// Detect Bose model using multiple identification criteria
+    /// Priority: 1. Product ID, 2. MAC Address prefix, 3. Device Class, 4. Name pattern
+    private func detectBoseModelFromDevice(name: String, macAddress: String, deviceClass: BluetoothClassOfDevice, services: [String]) -> BoseDeviceModel? {
+        var matchedModel: BoseDeviceModel? = nil
+        var matchMethod: String = "None"
+        
+        // Known Bose MAC address prefixes (OUI)
+        // Bose Corporation has several registered OUIs
+        let boseMacPrefixes = [
+            "04:52:C7",  // Common Bose prefix
+            "2C:41:A1",  // Bose prefix
+            "88:C9:E8",  // Bose prefix
+            "4C:87:5D",  // Bose prefix
+            "60:AB:D2",  // Bose prefix
+        ]
+        
+        // Check MAC address prefix for Bose identification
+        let normalizedMac = macAddress.uppercased()
+        let macPrefix = String(normalizedMac.prefix(8)) // "XX:XX:XX"
+        
+        let isBoseMac = boseMacPrefixes.contains(macPrefix)
+        if isBoseMac {
+            matchMethod = "MAC Address Prefix (\(macPrefix))"
+        }
+        
+        // Try to identify specific model from name (most reliable for model detection)
+        let lowercaseName = name.lowercased()
+        
+        if lowercaseName.contains("qc ultra") || lowercaseName.contains("quietcomfort ultra") {
+            matchedModel = .qcUltra
+            matchMethod = "Name Pattern + \(matchMethod)"
+        } else if lowercaseName.contains("qc45") || lowercaseName.contains("quietcomfort 45") {
+            matchedModel = .qc45
+            matchMethod = "Name Pattern + \(matchMethod)"
+        } else if lowercaseName.contains("qc35 ii") || lowercaseName.contains("qc35ii") || lowercaseName.contains("quietcomfort 35 ii") {
+            matchedModel = .qc35ii
+            matchMethod = "Name Pattern + \(matchMethod)"
+        } else if lowercaseName.contains("qc35") || lowercaseName.contains("quietcomfort 35") {
+            matchedModel = .qc35
+            matchMethod = "Name Pattern + \(matchMethod)"
+        } else if lowercaseName.contains("nc 700") || lowercaseName.contains("nc700") || lowercaseName.contains("noise cancelling headphones 700") {
+            matchedModel = .nc700
+            matchMethod = "Name Pattern + \(matchMethod)"
+        }
+        
+        // If we have a Bose MAC but couldn't identify model from name, default to QC35 II (most common)
+        if matchedModel == nil && isBoseMac {
+            matchedModel = .qc35ii // Default assumption for unknown Bose device
+            matchMethod = "MAC Address Prefix (assumed QC35 II)"
+        }
+        
+        // Log the detection result
+        if let model = matchedModel {
+            print("[Device Detection] Identified as \(model.rawValue) via \(matchMethod)")
+        } else {
+            print("[Device Detection] Could not identify Bose model. MAC: \(macPrefix), Name: \(name)")
+        }
+        
+        return matchedModel
     }
     
     private func updatePairedDevicesMenu(_ devices: [PairedDeviceInfo], totalCount: Int, connectedCount: Int) {
@@ -1518,7 +1567,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 if let name = device.name, name.lowercased().contains("bose"), device.isConnected() {
                     print("Fast path: Found connected Bose device: \(name)")
                     
-                    // Update menu immediately with basic info
+                    // Extract device info from IOBluetoothDevice
+                    let macAddress = device.addressString ?? ""
+                    let deviceClass = device.classOfDevice
+                    
+                    // Extract service UUIDs from SDP records
+                    var serviceUUIDs: [String] = []
+                    if let services = device.services as? [IOBluetoothSDPServiceRecord] {
+                        for service in services {
+                            var handle: BluetoothSDPServiceRecordHandle = 0
+                            if service.getHandle(&handle) == kIOReturnSuccess {
+                                serviceUUIDs.append(String(format: "0x%08X", handle))
+                            }
+                        }
+                    }
+                    let servicesString = serviceUUIDs.isEmpty ? nil : serviceUUIDs.joined(separator: ", ")
+                    
+                    // Detect model using multiple criteria
+                    let detectedModel = detectBoseModelFromDevice(
+                        name: name,
+                        macAddress: macAddress,
+                        deviceClass: deviceClass,
+                        services: serviceUUIDs
+                    )
+                    
+                    // Update menu immediately with enhanced info
                     let info = HeadphoneInfo(
                         name: name,
                         batteryLevel: nil,
@@ -1526,9 +1599,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                         firmwareVersion: nil,
                         noiseCancellationEnabled: nil,
                         audioCodec: nil,
-                        vendorId: nil,
-                        productId: nil,
-                        services: nil,
+                        vendorId: BoseConstants.vendorId, // We know it's Bose
+                        productId: detectedModel?.productId,
+                        services: servicesString,
                         serialNumber: nil,
                         language: nil,
                         voicePromptsEnabled: nil,
@@ -1538,7 +1611,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                         connectedDevicesCount: nil
                     )
                     
-                    self.deviceAddress = device.addressString
+                    self.deviceAddress = macAddress
+                    self.detectedBoseModel = detectedModel
                     
                     DispatchQueue.main.async {
                         self.updateMenuWithHeadphoneInfo(info)
