@@ -419,6 +419,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var disconnectionNotification: IOBluetoothUserNotification?
     private var lastConnectionAttempt: Date?
     
+    // Connection state management to prevent concurrent connections
+    private var isConnecting: Bool = false
+    private let connectionLock = NSLock()
+    
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         setupBluetoothNotifications()
@@ -564,24 +568,60 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     @objc private func deviceConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
-        // Simple approach - just note that a Bose device connected, but don't interfere with normal operation
+        // Check if this is a Bose device
         if isBoseDevice(device) {
-            print("Bose device connected: \(device.name ?? "Unknown")")
+            print("Bose device connected via Bluetooth: \(device.name ?? "Unknown")")
             currentBoseDevice = device
+            deviceAddress = device.addressString
             setupDeviceSpecificNotifications(for: device)
+            
+            // Update menu to show connected state - use a small delay to avoid race conditions
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.checkForBoseDevices()
+            }
         }
     }
     
     @objc private func deviceDisconnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
         // Only act on disconnection of our current device
-        if isBoseDevice(device) && currentBoseDevice?.addressString == device.addressString {
-            print("Bose device disconnected: \(device.name ?? "Unknown")")
+        if isBoseDevice(device) && (currentBoseDevice?.addressString == device.addressString || currentBoseDevice == nil) {
+            print("Bose device disconnected via Bluetooth: \(device.name ?? "Unknown")")
+            
+            // Close RFCOMM channel if open
+            if let channel = rfcommChannel, channel.isOpen() {
+                _ = channel.close()
+            }
+            rfcommChannel = nil
+            isChannelReady = false
+            
             currentBoseDevice = nil
             disconnectionNotification = nil // Clear the notification
             
-            // Update menu to show disconnected state
+            // Update menu to show disconnected state but keep the device name for reconnection
             DispatchQueue.main.async {
-                self.updateMenuWithNoDevice()
+                if let name = device.name {
+                    let info = HeadphoneInfo(
+                        name: name,
+                        batteryLevel: nil,
+                        isConnected: false,
+                        firmwareVersion: nil,
+                        noiseCancellationEnabled: nil,
+                        audioCodec: nil,
+                        vendorId: BoseConstants.vendorId,
+                        productId: nil,
+                        services: nil,
+                        serialNumber: nil,
+                        language: nil,
+                        voicePromptsEnabled: nil,
+                        selfVoiceLevel: nil,
+                        pairedDevices: nil,
+                        pairedDevicesCount: nil,
+                        connectedDevicesCount: nil
+                    )
+                    self.updateMenuWithHeadphoneInfo(info)
+                } else {
+                    self.updateMenuWithNoDevice()
+                }
             }
         }
     }
@@ -1563,99 +1603,108 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         
         // Fast path: Check IOBluetooth paired devices first (much faster than system_profiler)
         if let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] {
+            // First, look for a connected Bose device
             for device in pairedDevices {
-                if let name = device.name, name.lowercased().contains("bose"), device.isConnected() {
-                    print("Fast path: Found connected Bose device: \(name)")
-                    
-                    // Extract device info from IOBluetoothDevice
+                if let name = device.name, name.lowercased().contains("bose") {
                     let macAddress = device.addressString ?? ""
-                    let deviceClass = device.classOfDevice
                     
-                    // Extract service UUIDs from SDP records
-                    var serviceUUIDs: [String] = []
-                    if let services = device.services as? [IOBluetoothSDPServiceRecord] {
-                        for service in services {
-                            var handle: BluetoothSDPServiceRecordHandle = 0
-                            if service.getHandle(&handle) == kIOReturnSuccess {
-                                serviceUUIDs.append(String(format: "0x%08X", handle))
+                    // Always store the device address for later connection attempts
+                    self.deviceAddress = macAddress
+                    
+                    if device.isConnected() {
+                        print("Fast path: Found connected Bose device: \(name)")
+                        
+                        // Store the current Bose device for notifications
+                        currentBoseDevice = device
+                        setupDeviceSpecificNotifications(for: device)
+                        
+                        let deviceClass = device.classOfDevice
+                        
+                        // Extract service UUIDs from SDP records
+                        var serviceUUIDs: [String] = []
+                        if let services = device.services as? [IOBluetoothSDPServiceRecord] {
+                            for service in services {
+                                var handle: BluetoothSDPServiceRecordHandle = 0
+                                if service.getHandle(&handle) == kIOReturnSuccess {
+                                    serviceUUIDs.append(String(format: "0x%08X", handle))
+                                }
                             }
                         }
+                        let servicesString = serviceUUIDs.isEmpty ? nil : serviceUUIDs.joined(separator: ", ")
+                        
+                        // Detect model using multiple criteria
+                        let detectedModel = detectBoseModelFromDevice(
+                            name: name,
+                            macAddress: macAddress,
+                            deviceClass: deviceClass,
+                            services: serviceUUIDs
+                        )
+                        
+                        // Update menu immediately with enhanced info
+                        let info = HeadphoneInfo(
+                            name: name,
+                            batteryLevel: nil,
+                            isConnected: true,
+                            firmwareVersion: nil,
+                            noiseCancellationEnabled: nil,
+                            audioCodec: nil,
+                            vendorId: BoseConstants.vendorId, // We know it's Bose
+                            productId: detectedModel?.productId,
+                            services: servicesString,
+                            serialNumber: nil,
+                            language: nil,
+                            voicePromptsEnabled: nil,
+                            selfVoiceLevel: nil,
+                            pairedDevices: nil,
+                            pairedDevicesCount: nil,
+                            connectedDevicesCount: nil
+                        )
+                        
+                        self.detectedBoseModel = detectedModel
+                        
+                        DispatchQueue.main.async {
+                            self.updateMenuWithHeadphoneInfo(info)
+                        }
+                        
+                        // Only fetch detailed data via RFCOMM when device is connected to macOS
+                        self.detectNoiseCancellationStatusAsync()
+                        return
+                    } else {
+                        // Device is paired but not connected - show it in menu as clickable
+                        print("Found paired but disconnected Bose device: \(name)")
+                        
+                        let info = HeadphoneInfo(
+                            name: name,
+                            batteryLevel: nil,
+                            isConnected: false,
+                            firmwareVersion: nil,
+                            noiseCancellationEnabled: nil,
+                            audioCodec: nil,
+                            vendorId: BoseConstants.vendorId,
+                            productId: nil,
+                            services: nil,
+                            serialNumber: nil,
+                            language: nil,
+                            voicePromptsEnabled: nil,
+                            selfVoiceLevel: nil,
+                            pairedDevices: nil,
+                            pairedDevicesCount: nil,
+                            connectedDevicesCount: nil
+                        )
+                        
+                        DispatchQueue.main.async {
+                            self.updateMenuWithHeadphoneInfo(info)
+                        }
+                        // Don't try to connect automatically - wait for user click
+                        return
                     }
-                    let servicesString = serviceUUIDs.isEmpty ? nil : serviceUUIDs.joined(separator: ", ")
-                    
-                    // Detect model using multiple criteria
-                    let detectedModel = detectBoseModelFromDevice(
-                        name: name,
-                        macAddress: macAddress,
-                        deviceClass: deviceClass,
-                        services: serviceUUIDs
-                    )
-                    
-                    // Update menu immediately with enhanced info
-                    let info = HeadphoneInfo(
-                        name: name,
-                        batteryLevel: nil,
-                        isConnected: true,
-                        firmwareVersion: nil,
-                        noiseCancellationEnabled: nil,
-                        audioCodec: nil,
-                        vendorId: BoseConstants.vendorId, // We know it's Bose
-                        productId: detectedModel?.productId,
-                        services: servicesString,
-                        serialNumber: nil,
-                        language: nil,
-                        voicePromptsEnabled: nil,
-                        selfVoiceLevel: nil,
-                        pairedDevices: nil,
-                        pairedDevicesCount: nil,
-                        connectedDevicesCount: nil
-                    )
-                    
-                    self.deviceAddress = macAddress
-                    self.detectedBoseModel = detectedModel
-                    
-                    DispatchQueue.main.async {
-                        self.updateMenuWithHeadphoneInfo(info)
-                    }
-                    
-                    // Start fetching detailed data via RFCOMM
-                    self.detectNoiseCancellationStatusAsync()
-                    return
                 }
             }
         }
         
-        // Slow path fallback: Use system_profiler for more detailed info
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let task = Process()
-            task.launchPath = "/usr/sbin/system_profiler"
-            task.arguments = ["SPBluetoothDataType"]
-            
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-                
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                if let output = String(data: data, encoding: .utf8) {
-                    DispatchQueue.main.async {
-                        self?.parseBoseInfoFromSystemProfiler(output)
-                        self?.detectNoiseCancellationStatusAsync()
-                    }
-                } else {
-                    print("Failed to get system profiler output")
-                    DispatchQueue.main.async {
-                        self?.updateMenuWithNoDevice()
-                    }
-                }
-            } catch {
-                print("Error running system_profiler: \(error)")
-                DispatchQueue.main.async {
-                    self?.updateMenuWithNoDevice()
-                }
-            }
+        // No Bose device found in paired devices
+        DispatchQueue.main.async {
+            self.updateMenuWithNoDevice()
         }
     }
     
@@ -1665,10 +1714,75 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             return
         }
         
+        // Prevent concurrent connection attempts
+        connectionLock.lock()
+        if isConnecting {
+            connectionLock.unlock()
+            print("Connection already in progress, skipping")
+            return
+        }
+        
+        // Check if we already have an open RFCOMM channel
+        if let channel = rfcommChannel, channel.isOpen() {
+            connectionLock.unlock()
+            print("RFCOMM channel already open, skipping connection")
+            return
+        }
+        
+        isConnecting = true
+        connectionLock.unlock()
+        
+        // Normalize the address for comparison
+        let normalizedTargetAddr = deviceAddr.uppercased()
+            .replacingOccurrences(of: "-", with: ":")
+            .replacingOccurrences(of: " ", with: "")
+        
+        // Only proceed if the device is actually connected to macOS
+        guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
+            print("No paired devices found")
+            connectionLock.lock()
+            isConnecting = false
+            connectionLock.unlock()
+            return
+        }
+        
+        let device = pairedDevices.first(where: { device in
+            if let addr = device.addressString {
+                let normalizedDeviceAddr = addr.uppercased()
+                    .replacingOccurrences(of: "-", with: ":")
+                    .replacingOccurrences(of: " ", with: "")
+                return normalizedDeviceAddr == normalizedTargetAddr
+            }
+            // Fallback to name matching
+            return device.name?.lowercased().contains("bose") ?? false
+        })
+        
+        guard let boseDevice = device else {
+            print("Could not find device with address: \(deviceAddr)")
+            connectionLock.lock()
+            isConnecting = false
+            connectionLock.unlock()
+            return
+        }
+        
+        guard boseDevice.isConnected() else {
+            print("Device not connected to macOS, skipping RFCOMM connection")
+            connectionLock.lock()
+            isConnecting = false
+            connectionLock.unlock()
+            return
+        }
+        
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            print(">>> Starting connection to device: \(deviceAddr)")
+            defer {
+                self.connectionLock.lock()
+                self.isConnecting = false
+                self.connectionLock.unlock()
+            }
+            
+            print(">>> Starting RFCOMM connection to device: \(deviceAddr)")
             
             if self.connectToBoseDeviceSync(address: deviceAddr) {
                 print(">>> Connection successful, initializing Bose protocol...")
@@ -1686,7 +1800,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                     self.fetchAllDeviceInfo()
                 }
             } else {
-                print(">>> Connection failed")
+                print(">>> RFCOMM connection failed")
             }
         }
     }
@@ -1710,7 +1824,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                     return true
                 }
             }
-            if let name = device.name, name.contains("Bose") {
+            if let name = device.name, name.lowercased().contains("bose") {
                 return true
             }
             return false
@@ -1719,7 +1833,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             return false
         }
         
-        print("Found Bose device: \(device.name ?? "Unknown") at \(device.addressString ?? "Unknown")")
+        print("Found Bose device: \(device.name ?? "Unknown") at \(device.addressString ?? "Unknown"), connected: \(device.isConnected())")
+        
+        // Check if device is connected to macOS - if not, don't try RFCOMM
+        if !device.isConnected() {
+            print("Device not connected to macOS, cannot open RFCOMM channel")
+            return false
+        }
         
         // Store the current Bose device for notifications
         currentBoseDevice = device
@@ -1727,25 +1847,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Set up device-specific disconnect notifications
         setupDeviceSpecificNotifications(for: device)
         
-        if !device.isConnected() {
-            print("Device not connected, attempting to connect...")
-            let connectResult = device.openConnection()
-            if connectResult != kIOReturnSuccess {
-                print("Failed to open connection: \(krToString(connectResult))")
-            } else {
-                print("Connection opened successfully")
-                Thread.sleep(forTimeInterval: 1.0)
-            }
-        }
-        
+        // Perform SDP query to get services
         let ret = device.performSDPQuery(self, uuids: [])
         if ret != kIOReturnSuccess {
             print("SDP Query unsuccessful: \(krToString(ret))")
+            // Continue anyway - services might already be cached
         }
+        
+        // Small delay to allow SDP query to complete
+        Thread.sleep(forTimeInterval: 0.5)
         
         guard let services = device.services as? [IOBluetoothSDPServiceRecord] else {
             print("No services found on device")
             return false
+        }
+        
+        print("Found \(services.count) services on device")
+        for service in services {
+            print("  - Service: \(service.getServiceName() ?? "Unknown")")
         }
         
         guard let sppService = services.first(where: { $0.getServiceName() == "SPP Dev" }) else {
@@ -1754,6 +1873,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 let name = $0.getServiceName() ?? ""
                 return name.lowercased().contains("spp") || name.lowercased().contains("serial")
             }) {
+                print("Found alternative serial service: \(anySerialService.getServiceName() ?? "Unknown")")
                 return connectToService(device: device, service: anySerialService)
             }
             return false
@@ -2639,13 +2759,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     @objc private func connectToDevice() {
-        guard let deviceAddr = deviceAddress else { return }
-        attemptBluetoothConnection(address: deviceAddr)
+        // First try to use stored device address
+        if let deviceAddr = deviceAddress {
+            attemptBluetoothConnection(address: deviceAddr)
+            return
+        }
+        
+        // Fallback: Find any paired Bose device
+        if let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice],
+           let boseDevice = pairedDevices.first(where: { $0.name?.lowercased().contains("bose") ?? false }),
+           let address = boseDevice.addressString {
+            deviceAddress = address
+            attemptBluetoothConnection(address: address)
+        }
     }
     
     private func attemptBluetoothConnection(address: String) {
+        print("Attempting to connect to device: \(address)")
+        
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
+                print("No paired devices found")
                 return
             }
             
@@ -2656,24 +2790,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                     let cleanTargetAddr = address.replacingOccurrences(of: ":", with: "").replacingOccurrences(of: "-", with: "").uppercased()
                     return cleanDeviceAddr == cleanTargetAddr
                 }
-                if let name = device.name, name.contains("Bose") {
+                if let name = device.name, name.lowercased().contains("bose") {
                     return true
                 }
                 return false
             }) else {
+                print("Could not find Bose device in paired devices")
                 return
             }
             
-            // Attempt to connect
+            print("Found device: \(device.name ?? "Unknown"), connected: \(device.isConnected())")
+            
+            // Attempt to connect if not already connected
             if !device.isConnected() {
+                print("Opening Bluetooth connection...")
                 let result = device.openConnection()
                 if result == kIOReturnSuccess {
+                    print("Connection request sent successfully")
                     // Wait a moment for connection to establish
-                    Thread.sleep(forTimeInterval: 1.0)
-                    // Refresh device status
-                    DispatchQueue.main.async {
-                        self?.checkForBoseDevices()
+                    Thread.sleep(forTimeInterval: 2.0)
+                    
+                    // Check if connection was successful
+                    if device.isConnected() {
+                        print("Device is now connected")
+                        // The deviceConnected notification handler will refresh the menu
+                        // Only refresh if we didn't get a notification
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            if self?.currentHeadphoneInfo?.isConnected != true {
+                                self?.checkForBoseDevices()
+                            }
+                        }
+                    } else {
+                        print("Device did not connect after waiting")
                     }
+                } else {
+                    print("Failed to open connection: \(self?.krToString(result) ?? "unknown error")")
+                }
+            } else {
+                print("Device already connected, refreshing status")
+                // Device is already connected, just refresh
+                DispatchQueue.main.async {
+                    self?.checkForBoseDevices()
                 }
             }
         }
