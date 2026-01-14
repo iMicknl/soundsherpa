@@ -29,6 +29,12 @@ cp ".build/release/$APP_NAME" "$MACOS/$APP_NAME"
 # Copy Info.plist
 cp Info.plist "$CONTENTS/Info.plist"
 
+# Copy app icon
+if [ -f "AppIcon.icns" ]; then
+    cp AppIcon.icns "$RESOURCES/AppIcon.icns"
+    echo "App icon copied."
+fi
+
 # Create PkgInfo
 echo -n "APPL????" > "$CONTENTS/PkgInfo"
 

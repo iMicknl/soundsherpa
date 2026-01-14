@@ -2594,6 +2594,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         alert.informativeText = "Smart controls for non-Apple headphones\n\nSoundSherpa brings the Control Center experience to all headphones, not just Apple ones. Manage noise cancellation, battery, connections, and device switching from your menu bar. No more guessing. No more digging through menus.\n\nVersion 1.0"
         alert.alertStyle = .informational
         
+        // Set the app icon in the About dialog
+        if let iconPath = Bundle.main.path(forResource: "AppIcon", ofType: "icns"),
+           let icon = NSImage(contentsOfFile: iconPath) {
+            alert.icon = icon
+        }
+        
         // Add buttons - first button added is the default (rightmost, blue)
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Visit Website")

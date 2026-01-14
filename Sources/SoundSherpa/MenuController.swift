@@ -757,6 +757,13 @@ public class MenuController {
         alert.informativeText = "A menu bar app for managing your Bluetooth headphones.\n\nVersion 1.0"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
+        
+        // Set the app icon in the About dialog
+        if let iconPath = Bundle.main.path(forResource: "AppIcon", ofType: "icns"),
+           let icon = NSImage(contentsOfFile: iconPath) {
+            alert.icon = icon
+        }
+        
         alert.runModal()
     }
     
