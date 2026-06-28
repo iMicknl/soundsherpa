@@ -102,6 +102,31 @@ Key properties (Requirement 7):
 Implementation note: the RFCOMM delegate (`rfcommChannelData:`) feeds bytes to the actor, which
 resumes the pending continuation when the expected prefix arrives or the timeout fires.
 
+#### CONFIRMED root cause of the "detected but shows nothing" instability (on-device spike, 2026-06-28)
+
+The Bose QC35 SPP control channel allows **exactly one RFCOMM connection at a time**. The
+current app closes the channel only in `applicationWillTerminate` (graceful quit). On crash,
+force-quit, sleep, or unexpected disconnect, the channel is left **half-open**, and the next
+session's SDP query returns 0 services and `openRFCOMMChannel` fails with generic error
+`0xe00002bc` (kIOReturnError) — while `pairedDevices()` keeps working (it isn't gated). Killing
+all stale instances and relaunching once immediately restored full function. This is **not** a
+TCC/permission problem (the app shows ON in Privacy & Security → Bluetooth and still failed).
+
+Therefore the DeviceChannel/ConnectionManager MUST:
+1. **Defensively close any existing channel before opening a new one** (close-before-open), and
+   tolerate a stale channel on the device side (retry after a close + short delay).
+2. **Always tear down the channel** on every teardown path — not just graceful quit but also
+   `applicationWillTerminate`, sleep/wake (`NSWorkspace.willSleepNotification`), and observed
+   disconnect (R7.5).
+3. Issue the SDP query / open on a thread with a **live run loop** (main thread): IOBluetooth
+   delivers `sdpQueryComplete` and `rfcommChannelOpenComplete` via the calling thread's run
+   loop, so background GCD threads never receive the callback. The actor must hop to a
+   run-loop-backed context for the open, then can serialize I/O off it.
+
+Spike confirmed that with a single clean connection the full protocol decodes correctly:
+firmware (`00 01 03 …` → "1.0.4"), battery (`02 02 03 01 64` → 100%), serial (`00 07 03 …`),
+and the paired-devices list (`04 04 03 …`).
+
 ### BoseCodec (pure) — the test seam
 
 No `IOBluetooth`. Bytes in, typed values out. Preserves the *exact* existing wire format.
