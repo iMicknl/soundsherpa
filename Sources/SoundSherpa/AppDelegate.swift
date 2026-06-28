@@ -1864,13 +1864,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
 
     private func fetchButtonActionStatus() async {
-        let command: [UInt8] = [0x01, 0x09, 0x03, 0x04, 0x10, 0x04, 0x00, 0x07]
+        // Operator 0x01 = GET (length 0x00). The earlier packet used operator 0x03,
+        // which is the device's STATUS reply shape, not a request — so first-boot
+        // queries got no response and the menu showed no selection. The device
+        // replies with the 0x03 ACK that the parsing below reads.
+        let command: [UInt8] = [0x01, 0x09, 0x01, 0x00]
         let response = await send(command, expecting: [0x01, 0x09])
         
         print("Button Action Response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: ", "))")
         
-        if response.count >= 5 && response[0] == 0x01 && response[1] == 0x09 && response[2] == 0x03 {
-            let buttonActionValue = response[4]
+        // ACK layout: [0x01, 0x09, 0x03, 0x04, 0x10, 0x04, mode, 0x07]
+        // The configured mode is at byte 6; byte 4 is the button-ID (0x10), not the value.
+        if response.count >= 8 && response[0] == 0x01 && response[1] == 0x09 && response[2] == 0x03
+            && response[4] == 0x10 && response[5] == 0x04 {
+            let buttonActionValue = response[6]
             print("Button Action Value: 0x\(String(format: "%02X", buttonActionValue))")
             DispatchQueue.main.async {
                 self.updateButtonActionSelection(level: buttonActionValue)
