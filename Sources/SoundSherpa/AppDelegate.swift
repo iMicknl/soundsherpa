@@ -196,6 +196,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenuBar()
         setupBluetoothNotifications()
+        setupSleepWakeNotifications()
         checkForBoseDevices()
         
         updateTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
@@ -216,10 +217,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         // Clean up Bluetooth notifications
         connectionNotification?.unregister()
         disconnectionNotification?.unregister()
-        
-        if let channel = rfcommChannel, channel.isOpen() {
-            _ = channel.close()
-        }
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+
+        closeChannel()
     }
     
     private func setupMenuBar() {
@@ -336,6 +336,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             disconnectionNotification = device.register(forDisconnectNotification: self, selector: #selector(deviceDisconnected(_:device:)))
         }
     }
+
+    /// Observe system sleep/wake. On sleep we close our RFCOMM channel so we don't leave the
+    /// Bose device's single control channel orphaned half-open (which would block reconnection
+    /// after wake). On wake we re-scan and reconnect.
+    private func setupSleepWakeNotifications() {
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self, selector: #selector(systemWillSleep),
+                       name: NSWorkspace.willSleepNotification, object: nil)
+        nc.addObserver(self, selector: #selector(systemDidWake),
+                       name: NSWorkspace.didWakeNotification, object: nil)
+    }
+
+    @objc private func systemWillSleep(_ notification: Notification) {
+        print("System will sleep — closing RFCOMM channel to avoid orphaning it")
+        closeChannel()
+    }
+
+    @objc private func systemDidWake(_ notification: Notification) {
+        print("System did wake — re-scanning for Bose device")
+        // Cached connection state may be stale after sleep; force a fresh fetch.
+        lastDataFetchTime = nil
+        checkForBoseDevices()
+    }
     
     @objc private func deviceConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
         // Simple approach - just note that a Bose device connected, but don't interfere with normal operation
@@ -352,7 +375,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             print("Bose device disconnected: \(device.name ?? "Unknown")")
             currentBoseDevice = nil
             disconnectionNotification = nil // Clear the notification
-            
+
+            // Release our RFCOMM channel so we don't hold the device's single control
+            // channel half-open — otherwise the next connect is refused.
+            closeChannel()
+
             // Update menu to show disconnected state
             DispatchQueue.main.async {
                 self.updateMenuWithNoDevice()
@@ -1313,19 +1340,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         if let existingChannel = rfcommChannel, existingChannel.isOpen() {
             return true
         }
-        
-        rfcommChannel = nil
+
+        // Close-before-open: the Bose control service permits exactly one RFCOMM connection.
+        // If we hold a stale (non-open or leftover) channel, close it before opening a new one,
+        // otherwise the device refuses the connection and the menu shows no data.
+        closeChannel()
         isChannelReady = false
-        
+
+        // First attempt. If it fails, the device may still consider a prior channel open
+        // (e.g. orphaned by a crash/sleep); wait briefly and retry once.
+        if openChannel(device: device, channelId: channelId) {
+            return true
+        }
+
+        print("Channel open failed; waiting and retrying once in case of a stale device-side channel")
+        Thread.sleep(forTimeInterval: 1.0)
+        if openChannel(device: device, channelId: channelId) {
+            return true
+        }
+
+        return false
+    }
+
+    /// Open the RFCOMM channel using sync, then async, then a brute-force of known Bose channel
+    /// IDs. Returns true and stores `rfcommChannel` on success.
+    private func openChannel(device: IOBluetoothDevice, channelId: BluetoothRFCOMMChannelID) -> Bool {
         var channel: IOBluetoothRFCOMMChannel?
         var openResult = device.openRFCOMMChannelSync(&channel, withChannelID: channelId, delegate: self)
-        
+
         if openResult == kIOReturnSuccess, let ch = channel, ch.isOpen() {
             self.rfcommChannel = ch
             self.isChannelReady = true
             return true
         }
-        
+
         channelOpenSemaphore = DispatchSemaphore(value: 0)
         let asyncResult = device.openRFCOMMChannelAsync(&channel, withChannelID: channelId, delegate: self)
         if asyncResult == kIOReturnSuccess {
@@ -1335,10 +1383,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             if waitResult != .timedOut && isChannelReady && (rfcommChannel?.isOpen() ?? false) {
                 return true
             }
+            // Async open did not complete cleanly — drop the half-open channel.
+            closeChannel()
         } else {
             channelOpenSemaphore = nil
         }
-        
+
         let channelIdsToTry: [BluetoothRFCOMMChannelID] = [8, 9, 1, 2, 3]
         for tryChannelId in channelIdsToTry {
             if tryChannelId == channelId { continue }
@@ -1350,8 +1400,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 return true
             }
         }
-        
+
         return false
+    }
+
+    /// Close and release the RFCOMM channel if we hold one. Safe to call when there is none.
+    /// Centralizes teardown so every exit path (quit, sleep, disconnect, failed open) frees the
+    /// single Bose control channel instead of orphaning it.
+    private func closeChannel() {
+        if let channel = rfcommChannel {
+            if channel.isOpen() {
+                _ = channel.close()
+            }
+            rfcommChannel = nil
+        }
+        isChannelReady = false
     }
     
     private func initBoseConnection() -> Bool {
