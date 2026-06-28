@@ -22,28 +22,6 @@ struct HeadphoneInfo {
     let connectedDevicesCount: Int?
 }
 
-// MARK: - Paired Device Icon Mapping
-
-/// Maps a transport-agnostic PairedDeviceType (from SoundSherpaCore) to the SF Symbol
-/// name used in the menu. Lives in the UI layer so SoundSherpaCore stays free of AppKit.
-private extension PairedDeviceType {
-    var iconName: String {
-        switch self {
-        case .iPhone: return "iphone"
-        case .iPad: return "ipad"
-        case .macBook: return "laptopcomputer"
-        case .mac: return "desktopcomputer"
-        case .appleWatch: return "applewatch"
-        case .appleTV: return "appletv"
-        case .airPods: return "airpods"
-        case .appleGeneric: return "apple.logo"
-        case .windows: return "pc"
-        case .android: return "smartphone"
-        case .unknown: return "display"
-        }
-    }
-}
-
 enum SelfVoice: UInt8 {
     case off = 0x00
     case high = 0x01
