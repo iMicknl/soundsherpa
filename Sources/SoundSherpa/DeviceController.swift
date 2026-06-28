@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import IOBluetooth
 import Observation
@@ -26,6 +27,10 @@ import SoundSherpaCore
 @MainActor
 @Observable
 final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
+    /// Shared singleton so the SwiftUI `App` scene and the `@NSApplicationDelegateAdaptor`
+    /// AppDelegate observe and drive the SAME controller instance.
+    @ObservationIgnored static let shared = DeviceController()
+
     // MARK: - Observable state (main actor)
 
     // Connection + identity
@@ -95,6 +100,8 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     // Bluetooth connection monitoring
     @ObservationIgnored nonisolated(unsafe) private var currentBoseDevice: IOBluetoothDevice?
+    @ObservationIgnored nonisolated(unsafe) private var connectionNotification: IOBluetoothUserNotification?
+    @ObservationIgnored nonisolated(unsafe) private var disconnectionNotification: IOBluetoothUserNotification?
 
     // Tracks the language byte (incl. the voice-prompt high bit) so voice-prompt toggles can
     // preserve the selected language. Carried over from AppDelegate.
@@ -108,6 +115,104 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     override init() {
         super.init()
+    }
+
+    // MARK: - Lifecycle / Monitoring
+    //
+    // Relocated verbatim from the old AppDelegate. `startMonitoring` is the single entry
+    // point the app lifecycle calls on launch; `shutDown` is the synchronous teardown on
+    // terminate.
+
+    /// Register Bluetooth connect/disconnect + sleep/wake observers and run the initial scan.
+    /// Called from `applicationDidFinishLaunching`.
+    func startMonitoring() {
+        setupBluetoothNotifications()
+        setupSleepWakeNotifications()
+        checkForBoseDevices()
+    }
+
+    /// Synchronous termination teardown: the process exits right after this returns, so an
+    /// async `closeChannel()` hop onto connectionQueue might never run, orphaning the device's
+    /// single control channel (the very failure we guard against). Run it inline on the queue
+    /// and wait, so the channel is actually released before we terminate. Called from
+    /// `applicationWillTerminate`.
+    func shutDown() {
+        connectionNotification?.unregister()
+        disconnectionNotification?.unregister()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+
+        connectionQueue.sync { closeChannelLocked() }
+    }
+
+    private func setupBluetoothNotifications() {
+        // Register for general connection notifications. The main benefit is detecting
+        // disconnections via the device-specific notification set up on connect.
+        connectionNotification = IOBluetoothDevice.register(forConnectNotifications: self, selector: #selector(deviceConnected(_:device:)))
+    }
+
+    /// Register for disconnection notifications on the specific device, only if we don't
+    /// already have one registered. `nonisolated` so the connect flow (on connectionQueue,
+    /// off the main actor) can arm it during `connectToBoseDeviceSync`, exactly as the old
+    /// AppDelegate did. Touches only the `nonisolated(unsafe)` `disconnectionNotification`.
+    nonisolated private func setupDeviceSpecificNotifications(for device: IOBluetoothDevice) {
+        if disconnectionNotification == nil {
+            disconnectionNotification = device.register(forDisconnectNotification: self, selector: #selector(deviceDisconnected(_:device:)))
+        }
+    }
+
+    /// Observe system sleep/wake. On sleep we close our RFCOMM channel so we don't leave the
+    /// Bose device's single control channel orphaned half-open (which would block reconnection
+    /// after wake). On wake we re-scan and reconnect.
+    private func setupSleepWakeNotifications() {
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self, selector: #selector(systemWillSleep),
+                       name: NSWorkspace.willSleepNotification, object: nil)
+        nc.addObserver(self, selector: #selector(systemDidWake),
+                       name: NSWorkspace.didWakeNotification, object: nil)
+    }
+
+    @objc private func systemWillSleep(_ notification: Notification) {
+        print("System will sleep — closing RFCOMM channel to avoid orphaning it")
+        closeChannel()
+    }
+
+    @objc private func systemDidWake(_ notification: Notification) {
+        print("System did wake — re-scanning for Bose device")
+        // Cached connection state may be stale after sleep; force a fresh fetch.
+        lastDataFetchTime = nil
+        checkForBoseDevices()
+    }
+
+    @objc private func deviceConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        // Just note that a Bose device connected and arm its disconnect notification; don't
+        // interfere with normal operation.
+        if isBoseDevice(device) {
+            print("Bose device connected: \(device.name ?? "Unknown")")
+            currentBoseDevice = device
+            setupDeviceSpecificNotifications(for: device)
+        }
+    }
+
+    @objc private func deviceDisconnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
+        // Only act on disconnection of our current device.
+        if isBoseDevice(device) && currentBoseDevice?.addressString == device.addressString {
+            print("Bose device disconnected: \(device.name ?? "Unknown")")
+            currentBoseDevice = nil
+            disconnectionNotification = nil // Clear the notification
+
+            // Release our RFCOMM channel so we don't hold the device's single control
+            // channel half-open — otherwise the next connect is refused.
+            closeChannel()
+
+            // Reflect disconnected state in the UI.
+            self.isConnected = false
+            self.deviceName = nil
+        }
+    }
+
+    private func isBoseDevice(_ device: IOBluetoothDevice) -> Bool {
+        guard let name = device.name else { return false }
+        return name.lowercased().contains("bose")
     }
 
     // MARK: - Intents
@@ -353,6 +458,9 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
         // Store the current Bose device for notifications
         currentBoseDevice = device
+
+        // Set up device-specific disconnect notifications
+        setupDeviceSpecificNotifications(for: device)
 
         if !device.isConnected() {
             print("Device not connected, attempting to connect...")
