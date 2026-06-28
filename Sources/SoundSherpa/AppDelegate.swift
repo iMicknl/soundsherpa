@@ -166,10 +166,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var rfcommChannel: IOBluetoothRFCOMMChannel?
     private var channelOpenSemaphore: DispatchSemaphore?
     private var isChannelReady = false
-    private var responseBuffer: [UInt8] = []
-    private var responseSemaphore: DispatchSemaphore?
-    private var expectedResponsePrefix: [UInt8] = []
-    private let responseLock = NSLock()
+
+    // The DeviceChannel actor serializes all command I/O over the open RFCOMM channel so a
+    // reply can never land in the wrong command's buffer (R7.1). Recreated on each open,
+    // torn down on close. Incoming delegate bytes are forwarded to `deviceChannel.ingest`.
+    private var deviceChannel: DeviceChannel?
+
+    // Incoming RFCOMM bytes are pushed here from the delegate callback (synchronously, so
+    // arrival order is preserved) and drained by a single consumer task into the actor's
+    // `ingest`. This keeps ordered delivery without spawning an unordered Task per chunk.
+    private var ingestContinuation: AsyncStream<[UInt8]>.Continuation?
     private var currentNCLevel: UInt8 = 0xFF // Unknown
     private var currentSelfVoiceLevel: UInt8 = 0xFF // Unknown
     private var currentAutoOffLevel: UInt8 = 0xFF // Unknown
@@ -1118,60 +1124,60 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func connectPairedDevice(address: String) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        Task { [weak self] in
             guard let self = self else { return }
-            
+
             // Convert address string to bytes
             guard let addressBytes = self.addressStringToBytes(address) else {
                 print("Invalid address format: \(address)")
                 return
             }
-            
+
             // Build CONNECT_DEVICE command: [0x04, 0x01, 0x05, 0x07, 0x00, <6 bytes address>]
             var command: [UInt8] = [0x04, 0x01, 0x05, 0x07, 0x00]
             command.append(contentsOf: addressBytes)
-            
+
             print("Sending connect command to Bose for device: \(address)")
-            let response = self.sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x01], timeout: 2.0)
-            
+            let response = await self.send(command, expecting: [0x04, 0x01], timeout: 2.0)
+
             if response.count >= 4 && response[0] == 0x04 && response[1] == 0x01 && response[2] == 0x07 {
                 print("Connect command acknowledged for device: \(address)")
             } else {
                 print("Connect command response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
             }
-            
+
             // Always refresh after a delay to let the headphones update their state
-            Thread.sleep(forTimeInterval: 1.5)
-            self.fetchPairedDevices()
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await self.fetchPairedDevices()
         }
     }
-    
+
     private func disconnectPairedDevice(address: String) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        Task { [weak self] in
             guard let self = self else { return }
-            
+
             // Convert address string to bytes
             guard let addressBytes = self.addressStringToBytes(address) else {
                 print("Invalid address format: \(address)")
                 return
             }
-            
+
             // Build DISCONNECT_DEVICE command: [0x04, 0x02, 0x05, 0x06, <6 bytes address>]
             var command: [UInt8] = [0x04, 0x02, 0x05, 0x06]
             command.append(contentsOf: addressBytes)
-            
+
             print("Sending disconnect command to Bose for device: \(address)")
-            let response = self.sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x02], timeout: 2.0)
-            
+            let response = await self.send(command, expecting: [0x04, 0x02], timeout: 2.0)
+
             if response.count >= 4 && response[0] == 0x04 && response[1] == 0x02 && response[2] == 0x07 {
                 print("Disconnect command acknowledged for device: \(address)")
             } else {
                 print("Disconnect command response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
             }
-            
+
             // Always refresh after a delay to let the headphones update their state
-            Thread.sleep(forTimeInterval: 1.0)
-            self.fetchPairedDevices()
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            await self.fetchPairedDevices()
         }
     }
     
@@ -1292,28 +1298,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             return
         }
         
+        // The blocking IOBluetooth open + SDP query must run on a thread with a live run
+        // loop so the delegate callbacks are delivered (the documented root cause of the
+        // "shows nothing" bug). Keep that on the dedicated background queue. The command
+        // I/O afterward is serialized by the DeviceChannel actor and can run in a Task.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            
+
             print(">>> Starting connection to device: \(deviceAddr)")
-            
-            if self.connectToBoseDeviceSync(address: deviceAddr) {
-                print(">>> Connection successful, initializing Bose protocol...")
-                
-                // Show full menu immediately since we're connected
-                DispatchQueue.main.async {
-                    self.updateMenuItemsVisibility(isConnected: true)
-                }
-                
-                if self.initBoseConnection() {
-                    print(">>> Init successful, fetching device info...")
-                    self.fetchAllDeviceInfo()
-                } else {
-                    print(">>> Init failed, trying to fetch without init...")
-                    self.fetchAllDeviceInfo()
-                }
-            } else {
+
+            guard self.connectToBoseDeviceSync(address: deviceAddr) else {
                 print(">>> Connection failed")
+                return
+            }
+            print(">>> Connection successful, initializing Bose protocol...")
+
+            // Show full menu immediately since we're connected
+            DispatchQueue.main.async {
+                self.updateMenuItemsVisibility(isConnected: true)
+            }
+
+            Task { [weak self] in
+                guard let self = self else { return }
+                _ = await self.initBoseConnection()
+                print(">>> Fetching device info...")
+                await self.fetchAllDeviceInfo()
             }
         }
     }
@@ -1470,8 +1479,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         var openResult = device.openRFCOMMChannelSync(&channel, withChannelID: channelId, delegate: self)
 
         if openResult == kIOReturnSuccess, let ch = channel, ch.isOpen() {
-            self.rfcommChannel = ch
-            self.isChannelReady = true
+            attachChannel(ch)
             return true
         }
 
@@ -1481,7 +1489,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             self.rfcommChannel = channel
             let waitResult = channelOpenSemaphore?.wait(timeout: .now() + 10.0)
             channelOpenSemaphore = nil
-            if waitResult != .timedOut && isChannelReady && (rfcommChannel?.isOpen() ?? false) {
+            if waitResult != .timedOut && isChannelReady && (rfcommChannel?.isOpen() ?? false),
+               let ch = channel {
+                attachChannel(ch)
                 return true
             }
             // Async open did not complete cleanly — drop the half-open channel.
@@ -1496,8 +1506,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             channel = nil
             openResult = device.openRFCOMMChannelSync(&channel, withChannelID: tryChannelId, delegate: self)
             if openResult == kIOReturnSuccess, let ch = channel, ch.isOpen() {
-                self.rfcommChannel = ch
-                self.isChannelReady = true
+                attachChannel(ch)
                 return true
             }
         }
@@ -1505,10 +1514,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         return false
     }
 
+    /// Record a freshly-opened channel and wrap it in a DeviceChannel actor so all command
+    /// I/O is serialized. The actor is the single owner of the response buffer.
+    private func attachChannel(_ channel: IOBluetoothRFCOMMChannel) {
+        self.rfcommChannel = channel
+        self.isChannelReady = true
+        let actor = DeviceChannel(transport: IOBluetoothRFCOMMTransport(channel: channel))
+        self.deviceChannel = actor
+
+        // Drain delegate bytes into the actor, in order, from a single consumer task.
+        let stream = AsyncStream<[UInt8]> { continuation in
+            self.ingestContinuation = continuation
+        }
+        Task {
+            for await chunk in stream {
+                await actor.ingest(chunk)
+            }
+        }
+    }
+
     /// Close and release the RFCOMM channel if we hold one. Safe to call when there is none.
     /// Centralizes teardown so every exit path (quit, sleep, disconnect, failed open) frees the
     /// single Bose control channel instead of orphaning it.
     private func closeChannel() {
+        if let channel = deviceChannel {
+            Task { await channel.close() }   // fails any in-flight command with .channelClosed
+        }
+        deviceChannel = nil
+        ingestContinuation?.finish()
+        ingestContinuation = nil
         if let channel = rfcommChannel {
             if channel.isOpen() {
                 _ = channel.close()
@@ -1518,94 +1552,67 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         isChannelReady = false
     }
     
-    private func initBoseConnection() -> Bool {
+    // MARK: - Actor-backed command I/O
+
+    /// Send a command and await the single reply identified by `prefix`. Returns the reply
+    /// bytes, or an empty array on timeout / closed channel (preserving the legacy
+    /// "empty == failed" contract the callers already check). All access is serialized by
+    /// the DeviceChannel actor.
+    private func send(_ command: [UInt8], expecting prefix: [UInt8], timeout: TimeInterval = 0.5) async -> [UInt8] {
+        guard let channel = deviceChannel else { return [] }
+        do {
+            return try await channel.send(command, matcher: .prefix(prefix), timeout: timeout)
+        } catch {
+            return []
+        }
+    }
+
+    /// Send a command and collect every reply sharing `prefix` until `window` elapses. Used
+    /// for the status query, which provokes several distinct broadcast messages.
+    private func collect(_ command: [UInt8], prefix: [UInt8], window: TimeInterval) async -> [UInt8] {
+        guard let channel = deviceChannel else { return [] }
+        do {
+            return try await channel.send(command, matcher: .collecting(prefix: prefix), timeout: window)
+        } catch {
+            return []
+        }
+    }
+
+    private func initBoseConnection() async -> Bool {
         guard let channel = rfcommChannel, channel.isOpen() else {
             return false
         }
-        
-        let initCommand: [UInt8] = [0x00, 0x01, 0x01, 0x00]
-        responseBuffer = []
-        responseSemaphore = DispatchSemaphore(value: 0)
-        
-        var data = initCommand
-        var result: [UInt8] = []
-        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            responseSemaphore = nil
-            return false
-        }
-        
-        let waitResult = responseSemaphore?.wait(timeout: .now() + 5.0)
-        let _ = responseSemaphore  // Keep reference until after wait
-        responseSemaphore = nil
-        
-        if waitResult == .timedOut {
-            return true
-        }
 
-        // The init reply carries the firmware version (function 0x01). We used to discard
-        // it; capture it via the pure codec instead so the Info submenu can show it.
-        if let firmware = BoseCodec.decodeFirmware(responseBuffer) {
+        // The init handshake reply carries the firmware version (function 0x01). We used to
+        // discard it; capture it via the pure codec so the Info submenu can show it.
+        let response = await send([0x00, 0x01, 0x01, 0x00], expecting: [0x00, 0x01], timeout: 5.0)
+        if let firmware = BoseCodec.decodeFirmware(response) {
             cachedFirmwareVersion = firmware
             storeMetadata(DeviceMetadata(firmware: firmware))
             DispatchQueue.main.async {
                 self.updateInfoRow(tag: 401, label: "Firmware", value: firmware)
             }
         }
-
         return true
     }
 
-    
-    // MARK: - Command Helpers
-    
-    private func sendCommandAndWait(command: [UInt8], expectedPrefix: [UInt8], timeout: TimeInterval = 0.5) -> [UInt8] {
-        guard let channel = rfcommChannel, channel.isOpen() else { return [] }
-        
-        responseLock.lock()
-        responseBuffer = []
-        expectedResponsePrefix = expectedPrefix
-        responseLock.unlock()
-        
-        responseSemaphore = DispatchSemaphore(value: 0)
-        
-        var data = command
-        var result: [UInt8] = []
-        let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            responseSemaphore = nil
-            responseLock.lock()
-            expectedResponsePrefix = []
-            responseLock.unlock()
-            return []
-        }
-        
-        _ = responseSemaphore?.wait(timeout: .now() + timeout)
-        let _ = responseSemaphore  // Keep reference until after wait
-        responseSemaphore = nil
-        
-        responseLock.lock()
-        let result_buffer = responseBuffer
-        expectedResponsePrefix = []
-        responseLock.unlock()
-        
-        return result_buffer
-    }
-    
+
+    // MARK: - Command Helpers (legacy synchronous path — being retired)
+
     // MARK: - Fetch All Device Info
-    
-    private func fetchAllDeviceInfo() {
+
+    private func fetchAllDeviceInfo() async {
         // Only fetch fresh data if cache is stale or we don't have cached data
         if shouldFetchFreshData() {
-            fetchBatteryLevel()
-            fetchSerialNumber()
-            fetchDeviceStatus()
-            fetchAutoOffStatus()
-            fetchButtonActionStatus()
+            await fetchBatteryLevel()
+            await fetchSerialNumber()
+            await fetchDeviceStatus()
+            await fetchAutoOffStatus()
+            await fetchButtonActionStatus()
             markDataAsFetched()
-            
+
             // Fetch paired devices last (it's slower due to per-device status queries)
-            fetchPairedDevices()
+            await fetchPairedDevices()
         } else {
             // Use cached data - just update the menu with what we have
             DispatchQueue.main.async {
@@ -1614,22 +1621,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
     }
     
-    private func fetchBatteryLevel() {
-        let command: [UInt8] = [0x02, 0x02, 0x01, 0x00]
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x02, 0x02])
-        
-        if response.count >= 5 && response[0] == 0x02 && response[1] == 0x02 && response[2] == 0x03 {
-            let level = Int(response[4])
+    private func fetchBatteryLevel() async {
+        let response = await send([0x02, 0x02, 0x01, 0x00], expecting: [0x02, 0x02])
+
+        if let level = BoseCodec.decodeBattery(response) {
             cachedBatteryLevel = level // Cache the battery level
             DispatchQueue.main.async {
                 self.updateBatteryInMenu(level)
             }
         }
     }
-    
-    private func fetchSerialNumber() {
-        let response = sendCommandAndWait(command: BoseCodec.encodeSerialQuery(),
-                                          expectedPrefix: [0x00, 0x07])
+
+    private func fetchSerialNumber() async {
+        let response = await send(BoseCodec.encodeSerialQuery(), expecting: [0x00, 0x07])
 
         if let serial = BoseCodec.decodeSerial(response) {
             cachedSerialNumber = serial // Cache the serial number
@@ -1639,10 +1643,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             }
         }
     }
-    
-    private func fetchDeviceStatus() {
-        let deviceIdResponse = sendCommandAndWait(command: BoseCodec.encodeDeviceIdQuery(),
-                                                  expectedPrefix: [0x00, 0x03])
+
+    private func fetchDeviceStatus() async {
+        let deviceIdResponse = await send(BoseCodec.encodeDeviceIdQuery(), expecting: [0x00, 0x03])
         if let modelId = BoseCodec.decodeModelId(deviceIdResponse) {
             storeMetadata(DeviceMetadata(modelId: modelId))
             DispatchQueue.main.async {
@@ -1650,51 +1653,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                                    value: String(format: "Bose 0x%04X", modelId))
             }
         }
-        
-        let statusCommand: [UInt8] = [0x01, 0x01, 0x05, 0x00]
-        
-        responseLock.lock()
-        responseBuffer = []
-        expectedResponsePrefix = [0x01]
-        responseLock.unlock()
-        
-        responseSemaphore = DispatchSemaphore(value: 0)
-        
-        var data = statusCommand
-        var result: [UInt8] = []
-        let writeResult = rfcommChannel?.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-        if writeResult != kIOReturnSuccess {
-            responseSemaphore = nil
-            responseLock.lock()
-            expectedResponsePrefix = []
-            responseLock.unlock()
-            return
-        }
-        
-        _ = responseSemaphore?.wait(timeout: .now() + 0.5)
-        
-        for _ in 0..<5 {
-            responseSemaphore = DispatchSemaphore(value: 0)
-            let waitResult = responseSemaphore?.wait(timeout: .now() + 0.15)
-            if waitResult == .timedOut {
-                break
-            }
-        }
-        let _ = responseSemaphore  // Keep reference until after wait
-        responseSemaphore = nil
-        
-        responseLock.lock()
-        expectedResponsePrefix = []
-        responseLock.unlock()
-        
-        responseLock.lock()
-        let statusResponse = responseBuffer
-        expectedResponsePrefix = []
-        responseLock.unlock()
-        
+
+        // The status query provokes several broadcast messages (language, NC, self-voice);
+        // collect everything starting with 0x01 over a short window, then parse.
+        let statusResponse = await collect([0x01, 0x01, 0x05, 0x00], prefix: [0x01], window: 1.0)
         parseDeviceStatusResponse(statusResponse)
     }
-    
+
     private func parseDeviceStatusResponse(_ response: [UInt8]) {
         // Parse language
         for i in 0..<response.count {
@@ -1750,16 +1715,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     // Query individual device status using GET_DEVICE_INFO command
-    private func getDeviceStatus(address: String) -> DeviceStatus {
+    private func getDeviceStatus(address: String) async -> DeviceStatus {
         guard let addressBytes = addressStringToBytes(address) else {
             return .disconnected
         }
-        
+
         // GET_DEVICE_INFO: [0x04, 0x05, 0x01, 0x06, <6 bytes address>]
         var command: [UInt8] = [0x04, 0x05, 0x01, 0x06]
         command.append(contentsOf: addressBytes)
-        
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x05, 0x03], timeout: 1.0)
+
+        let response = await send(command, expecting: [0x04, 0x05, 0x03], timeout: 1.0)
         
         // Response: [0x04, 0x05, 0x03, length, <6 bytes address>, status_byte, ...]
         if response.count >= 11 && response[0] == 0x04 && response[1] == 0x05 && response[2] == 0x03 {
@@ -1777,9 +1742,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         case two = 0x03
     }
     
-    private func fetchPairedDevices() {
+    private func fetchPairedDevices() async {
         let command: [UInt8] = [0x04, 0x04, 0x01, 0x00]
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x04, 0x04])
+        let response = await send(command, expecting: [0x04, 0x04])
         
         print("Paired devices response: \(response.map { String(format: "%02X", $0) }.joined(separator: " "))")
         
@@ -1805,7 +1770,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             // Query each device's status (this is the slow part)
             var devices: [PairedDeviceInfo] = []
             for (address, _) in addresses {
-                let status = getDeviceStatus(address: address)
+                let status = await getDeviceStatus(address: address)
                 let isConnected = (status == .connected || status == .thisDevice)
                 let isCurrentDevice = (status == .thisDevice)
                 
@@ -1834,10 +1799,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
     }
     
-    private func fetchAutoOffStatus() {
+    private func fetchAutoOffStatus() async {
         let command: [UInt8] = [0x01, 0x04, 0x01, 0x00]
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x04])
-        
+        let response = await send(command, expecting: [0x01, 0x04])
+
         if response.count >= 5 && response[0] == 0x01 && response[1] == 0x04 && response[2] == 0x03 {
             let autoOffValue = response[4]
             DispatchQueue.main.async {
@@ -1845,10 +1810,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             }
         }
     }
-    
-    private func fetchButtonActionStatus() {
+
+    private func fetchButtonActionStatus() async {
         let command: [UInt8] = [0x01, 0x09, 0x03, 0x04, 0x10, 0x04, 0x00, 0x07]
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x09])
+        let response = await send(command, expecting: [0x01, 0x09])
         
         print("Button Action Response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: ", "))")
         
@@ -1863,23 +1828,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
     }
     
-    private func getAutoOff() -> AutoOff {
+    private func getAutoOff() async -> AutoOff {
         let command: [UInt8] = [0x01, 0x04, 0x01, 0x00]
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x04])
-        
+        let response = await send(command, expecting: [0x01, 0x04])
+
         if response.count >= 5 && response[0] == 0x01 && response[1] == 0x04 && response[2] == 0x03 {
             return AutoOff(rawValue: response[4]) ?? .unknown
         }
         return .unknown
     }
-    
-    private func setAutoOffValue(_ minutes: AutoOff) -> Bool {
+
+    private func setAutoOffValue(_ minutes: AutoOff) async -> Bool {
         let command: [UInt8] = [0x01, 0x04, 0x02, 0x01, minutes.rawValue]
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x01, 0x04])
-        
+        let response = await send(command, expecting: [0x01, 0x04])
+
         if response.count >= 4 && response[0] == 0x01 && response[1] == 0x04 {
             // Verify the setting by reading it back
-            let gotMinutes = getAutoOff()
+            let gotMinutes = await getAutoOff()
             return gotMinutes == minutes
         }
         return false
@@ -1956,29 +1921,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         for i in 0..<dataLength {
             responseData.append(bytes[i])
         }
-        
-        responseLock.lock()
-        let expectedPrefix = expectedResponsePrefix
-        var isExpectedResponse = expectedPrefix.isEmpty
-        
-        if !isExpectedResponse && !responseData.isEmpty {
-            if expectedPrefix.count == 1 {
-                isExpectedResponse = responseData[0] == expectedPrefix[0]
-            } else if expectedPrefix.count >= 2 && responseData.count >= 2 {
-                isExpectedResponse = responseData[0] == expectedPrefix[0] && responseData[1] == expectedPrefix[1]
-            }
-        }
-        
-        if isExpectedResponse {
-            responseBuffer.append(contentsOf: responseData)
-            let semaphore = responseSemaphore
-            responseLock.unlock()
-            semaphore?.signal()
-        } else {
-            responseLock.unlock()
-        }
-        
-        // Parse NC status updates
+
+        // Forward to the DeviceChannel actor (in arrival order) to satisfy the in-flight
+        // command. The actor decides whether this chunk matches via its ResponseMatcher.
+        ingestContinuation?.yield(responseData)
+
+        // Independently, react to unsolicited NC status broadcasts so the menu reflects
+        // changes made with the physical button even when no command is in flight.
         if responseData.count >= 5 && responseData[0] == 0x01 && responseData[1] == 0x06 {
             var ncLevel: UInt8
             if responseData[2] == 0x04 && responseData.count == 5 {
@@ -2401,15 +2350,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func sendNoiseCancellationCommand(level: UInt8) {
-        ensureConnectionAsync { [weak self] connected in
-            guard connected, let self = self else { return }
-            
-            let command: [UInt8] = [0x01, 0x06, 0x02, 0x01, level]
-            self.sendCommandAsync(command) { _ in
-                DispatchQueue.main.async {
-                    self.updateNCSelection(level: level)
-                }
-            }
+        Task { [weak self] in
+            guard let self = self, await self.ensureConnected() else { return }
+            _ = await self.send([0x01, 0x06, 0x02, 0x01, level], expecting: [0x01, 0x06])
+            DispatchQueue.main.async { self.updateNCSelection(level: level) }
         }
     }
     
@@ -2433,10 +2377,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         let autoOffValue = UInt8(sender.tag - 600) // Remove the offset
         guard let autoOff = AutoOff(rawValue: autoOffValue) else { return }
         
-        ensureConnectionAsync { [weak self] connected in
-            guard connected, let self = self else { return }
-            
-            let success = self.setAutoOffValue(autoOff)
+        Task { [weak self] in
+            guard let self = self, await self.ensureConnected() else { return }
+            let success = await self.setAutoOffValue(autoOff)
             DispatchQueue.main.async {
                 if success {
                     self.updateAutoOffSelection(level: autoOffValue)
@@ -2447,32 +2390,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             }
         }
     }
-    
+
     private func setSelfVoiceAsync(_ level: SelfVoice) {
-        ensureConnectionAsync { [weak self] connected in
-            guard connected, let self = self else { return }
-            
-            let command: [UInt8] = [0x01, 0x0b, 0x02, 0x02, 0x01, level.rawValue, 0x38]
-            self.sendCommandAsync(command) { _ in
-                DispatchQueue.main.async {
-                    self.updateSelfVoiceSelection(level: level.rawValue)
-                }
-            }
+        Task { [weak self] in
+            guard let self = self, await self.ensureConnected() else { return }
+            _ = await self.send([0x01, 0x0b, 0x02, 0x02, 0x01, level.rawValue, 0x38], expecting: [0x01, 0x0b])
+            DispatchQueue.main.async { self.updateSelfVoiceSelection(level: level.rawValue) }
         }
     }
-    
+
     @objc private func setLanguage(_ sender: NSMenuItem) {
         let languageValue = UInt8(sender.tag)
-        
-        ensureConnectionAsync { [weak self] connected in
-            guard connected, let self = self else { return }
-            
-            let command: [UInt8] = [0x01, 0x03, 0x02, 0x01, languageValue]
-            self.sendCommandAsync(command) { _ in
-                DispatchQueue.main.async {
-                    if let lang = PromptLanguage(rawValue: languageValue) {
-                        self.updateLanguageCheckmark(lang)
-                    }
+
+        Task { [weak self] in
+            guard let self = self, await self.ensureConnected() else { return }
+            _ = await self.send([0x01, 0x03, 0x02, 0x01, languageValue], expecting: [0x01, 0x03])
+            DispatchQueue.main.async {
+                if let lang = PromptLanguage(rawValue: languageValue) {
+                    self.updateLanguageCheckmark(lang)
                 }
             }
         }
@@ -2497,33 +2432,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func setButtonAction(_ action: ButtonAction) {
-        ensureConnectionAsync { [weak self] connected in
-            guard connected, let self = self else { return }
-            
-            let command: [UInt8] = [0x01, 0x09, 0x02, 0x03, 0x10, 0x04, action.rawValue]
-            self.sendCommandAsync(command) { _ in
-                DispatchQueue.main.async {
-                    self.updateButtonActionSelection(level: action.rawValue)
-                }
-            }
+        Task { [weak self] in
+            guard let self = self, await self.ensureConnected() else { return }
+            _ = await self.send([0x01, 0x09, 0x02, 0x03, 0x10, 0x04, action.rawValue], expecting: [0x01, 0x09])
+            DispatchQueue.main.async { self.updateButtonActionSelection(level: action.rawValue) }
         }
     }
-    
+
     private func setVoicePrompts(on: Bool) {
-        ensureConnectionAsync { [weak self] connected in
-            guard connected, let self = self else { return }
-            
+        Task { [weak self] in
+            guard let self = self, await self.ensureConnected() else { return }
+
             var languageValue = self.currentLanguageValue & 0x7F
             if on {
                 languageValue |= 0x80
             }
-            
-            let command: [UInt8] = [0x01, 0x03, 0x02, 0x01, languageValue]
-            self.sendCommandAsync(command) { _ in
-                DispatchQueue.main.async {
-                    self.updateVoicePromptsCheckmark(on)
-                }
-            }
+
+            _ = await self.send([0x01, 0x03, 0x02, 0x01, languageValue], expecting: [0x01, 0x03])
+            DispatchQueue.main.async { self.updateVoicePromptsCheckmark(on) }
         }
     }
     
@@ -2566,56 +2492,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     // MARK: - Async Helpers
-    
-    private func sendCommandAsync(_ command: [UInt8], completion: @escaping ([UInt8]?) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self,
-                  let channel = self.rfcommChannel, channel.isOpen() else {
-                completion(nil)
-                return
-            }
-            
-            self.responseBuffer = []
-            self.responseSemaphore = DispatchSemaphore(value: 0)
-            
-            var data = command
-            var result: [UInt8] = []
-            let writeResult = channel.writeAsync(&data, length: UInt16(data.count), refcon: &result)
-            if writeResult != kIOReturnSuccess {
-                self.responseSemaphore = nil
-                completion(nil)
-                return
-            }
-            
-            let waitResult = self.responseSemaphore?.wait(timeout: .now() + 2.0)
-            let _ = self.responseSemaphore  // Keep reference until after wait
-            self.responseSemaphore = nil
-            
-            if waitResult == .timedOut {
-                completion(nil)
-                return
-            }
-            
-            completion(self.responseBuffer.isEmpty ? nil : self.responseBuffer)
-        }
-    }
-    
-    private func ensureConnectionAsync(completion: @escaping (Bool) -> Void) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else {
-                completion(false)
-                return
-            }
-            
-            if self.rfcommChannel == nil || !(self.rfcommChannel?.isOpen() ?? false) {
-                if let deviceAddr = self.deviceAddress {
-                    let result = self.connectToBoseDeviceSync(address: deviceAddr)
-                    completion(result)
-                } else {
-                    completion(false)
-                }
-            } else {
-                completion(true)
+
+    /// Ensure an open channel exists, (re)connecting if needed. Returns whether a channel
+    /// is available afterward. The blocking IOBluetooth open/SDP query runs on a GCD
+    /// background thread (not the Swift cooperative pool) because it depends on that
+    /// thread's run loop to receive the open/SDP delegate callbacks.
+    private func ensureConnected() async -> Bool {
+        if let channel = rfcommChannel, channel.isOpen() { return true }
+        guard let deviceAddr = deviceAddress else { return false }
+
+        return await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let result = self?.connectToBoseDeviceSync(address: deviceAddr) ?? false
+                continuation.resume(returning: result)
             }
         }
     }
