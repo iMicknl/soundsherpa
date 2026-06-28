@@ -9,11 +9,11 @@ struct SegmentedSection<Value: Hashable>: View {
     let onSelect: (Value) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ForEach(options, id: \.value) { option in
                     pill(option)
                 }
@@ -27,17 +27,17 @@ struct SegmentedSection<Value: Hashable>: View {
         Button {
             onSelect(option.value)
         } label: {
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 Image(systemName: option.systemImage)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                 Text(option.title)
-                    .font(.caption)
+                    .font(.caption2)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
+            .padding(.vertical, 7)
             .background {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.regularMaterial))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary))
             }
             .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
         }

@@ -400,11 +400,13 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
                     }
 
                     self.deviceName = name
-                    // Note: do NOT set isConnected here. The device being paired+connected at
-                    // the OS level doesn't mean our RFCOMM control channel is open yet. The
-                    // authoritative set happens only after connectToBoseDeviceSync succeeds in
-                    // detectNoiseCancellationStatusAsync; a failed connect leaves it false so
-                    // the NC pills don't silently no-op against a non-existent channel.
+                    // isConnected reflects OS-level connection: the device is paired and
+                    // connected, so the controls are shown immediately. The RFCOMM control
+                    // channel is a separate, lazier concern — it can fail or drop transiently,
+                    // and `ensureConnected` (re)opens it on demand when a command is sent. We
+                    // deliberately do NOT gate the UI on the channel: doing so hid the entire
+                    // tile whenever a channel open failed, even though the device was usable.
+                    self.isConnected = true
                     // Show last-known-good static metadata instantly, before RFCOMM I/O.
                     if let address = device.addressString {
                         self.applyCachedMetadata(for: address)
@@ -439,21 +441,13 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             print(">>> Starting connection to device: \(deviceAddr)")
 
             guard self.connectToBoseDeviceSync(address: deviceAddr) else {
-                print(">>> Connection failed")
-                // A failed connect must not leave isConnected stuck true — otherwise the NC
-                // pills appear active but silently no-op against a non-existent channel.
-                Task { @MainActor [weak self] in
-                    self?.isConnected = false
-                }
+                print(">>> Connection failed — control channel not open; will retry on next command/scan")
+                // Do not flip isConnected: the device is still connected at the OS level and
+                // the UI should stay visible. ensureConnected retries the channel when the
+                // user next sends a command, and the periodic scan retries detection.
                 return
             }
             print(">>> Connection successful, initializing Bose protocol...")
-
-            // Authoritative connected state: only set true once the RFCOMM channel is
-            // confirmed open (connectToBoseDeviceSync returned success).
-            Task { @MainActor [weak self] in
-                self?.isConnected = true
-            }
 
             Task { [weak self] in
                 guard let self = self else { return }

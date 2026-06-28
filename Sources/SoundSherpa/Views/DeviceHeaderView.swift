@@ -6,26 +6,28 @@ struct DeviceHeaderView: View {
     let batteryLevel: Int?
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             ZStack {
-                Circle().fill(.tint).frame(width: 36, height: 36)
+                Circle().fill(.tint).frame(width: 30, height: 30)
                 Image(systemName: "headphones.over.ear")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.white)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.headline)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name).font(.subheadline.weight(.semibold))
                 if let level = batteryLevel {
                     HStack(spacing: 4) {
                         Image(systemName: batterySymbol(level))
                             .foregroundStyle(batteryColor(level))
                         Text("\(level)%").foregroundStyle(.secondary)
                     }
-                    .font(.subheadline)
+                    .font(.caption)
                 }
             }
             Spacer()
         }
+        .padding(.horizontal, 4)
+        .padding(.top, 2)
     }
 
     private func batterySymbol(_ level: Int) -> String {

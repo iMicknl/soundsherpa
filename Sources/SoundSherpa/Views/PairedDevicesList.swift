@@ -6,25 +6,22 @@ struct PairedDevicesList: View {
     let onToggle: (PairedDeviceInfo) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Paired Devices")
-                .font(.subheadline.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            ForEach(devices, id: \.address) { device in
-                Button {
-                    onToggle(device)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: iconName(for: device))
-                            .frame(width: 20)
-                        Text(DeviceDisplay.pairedDeviceDisplayName(rawName: device.name, address: device.address))
-                        Spacer()
-                        if device.isConnected {
-                            Circle().fill(.tint).frame(width: 8, height: 8)
-                        }
-                    }
+            VStack(spacing: 1) {
+                ForEach(devices, id: \.address) { device in
+                    MenuRow(
+                        title: DeviceDisplay.pairedDeviceDisplayName(rawName: device.name, address: device.address),
+                        systemImage: iconName(for: device),
+                        trailing: {
+                            if device.isConnected {
+                                Circle().fill(.tint).frame(width: 7, height: 7)
+                            }
+                        },
+                        action: { onToggle(device) })
                 }
-                .buttonStyle(.plain)
             }
         }
     }
