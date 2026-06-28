@@ -172,6 +172,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     // torn down on close. Incoming delegate bytes are forwarded to `deviceChannel.ingest`.
     private var deviceChannel: DeviceChannel?
 
+    // The brand registry resolves which DevicePlugin speaks a connected device's protocol,
+    // from its advertised name alone. Battery and static-metadata reads route through the
+    // resolved plugin, so supporting a new brand (Sony, …) is registering one more plugin in
+    // DeviceRegistry.standard — no change here. `activePlugin` is the plugin for the device
+    // we're currently talking to, resolved on connect.
+    private let deviceRegistry = DeviceRegistry.standard
+    private var activePlugin: DevicePlugin?
+
     // Incoming RFCOMM bytes are pushed here from the delegate callback (synchronously, so
     // arrival order is preserved) and drained by a single consumer task into the actor's
     // `ingest`. This keeps ordered delivery without spawning an unordered Task per chunk.
@@ -1236,6 +1244,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                     
                     self.deviceAddress = device.addressString
 
+                    // Resolve which brand plugin speaks this device's protocol, by name. All
+                    // command I/O below routes through it, so a new brand is a new plugin.
+                    self.activePlugin = self.deviceRegistry.plugin(forDeviceNamed: name)
+
                     // Read host-side Bluetooth facts (VID/PID, services) that the Bose
                     // control protocol can't provide, straight from the SDP records.
                     let sdpMeta = self.sdpMetadata(for: device)
@@ -1356,7 +1368,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
         
         print("Found Bose device: \(device.name ?? "Unknown") at \(device.addressString ?? "Unknown")")
-        
+
+        // Resolve the brand plugin from the device name if the fast path didn't already
+        // (e.g. when we arrived here via the system_profiler slow path). All command I/O
+        // routes through it.
+        if activePlugin == nil, let name = device.name {
+            activePlugin = deviceRegistry.plugin(forDeviceNamed: name)
+        }
+
         // Store the current Bose device for notifications
         currentBoseDevice = device
         
@@ -1541,6 +1560,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             Task { await channel.close() }   // fails any in-flight command with .channelClosed
         }
         deviceChannel = nil
+        activePlugin = nil
         ingestContinuation?.finish()
         ingestContinuation = nil
         if let channel = rfcommChannel {
@@ -1622,9 +1642,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func fetchBatteryLevel() async {
-        let response = await send([0x02, 0x02, 0x01, 0x00], expecting: [0x02, 0x02])
+        // Route through the resolved brand plugin over the serialized channel. The plugin
+        // owns the brand-specific encode/decode; this layer just stores and displays.
+        guard let plugin = activePlugin, let channel = deviceChannel else { return }
 
-        if let level = BoseCodec.decodeBattery(response) {
+        if let level = await plugin.readBatteryLevel(over: channel) {
             cachedBatteryLevel = level // Cache the battery level
             DispatchQueue.main.async {
                 self.updateBatteryInMenu(level)
