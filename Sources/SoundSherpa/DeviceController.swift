@@ -113,6 +113,14 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     @ObservationIgnored private var lastDataFetchTime: Date?
     @ObservationIgnored private let cacheValidityDuration: TimeInterval = 30.0 // Cache is valid for 30 seconds
 
+    // Periodic refresh timers carried over from the old AppDelegate. The 30s scan timer
+    // rescans/reconnects; the 10s NC-poll timer re-reads noise-cancellation status while
+    // connected. Both run on the main run loop and their closures are @MainActor context
+    // (the controller is @MainActor), so they can call the actor-isolated refresh methods
+    // directly. Invalidated in `shutDown()` before the channel teardown.
+    @ObservationIgnored private var scanTimer: Timer?
+    @ObservationIgnored private var ncPollTimer: Timer?
+
     override init() {
         super.init()
     }
@@ -129,6 +137,26 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         setupBluetoothNotifications()
         setupSleepWakeNotifications()
         checkForBoseDevices()
+
+        // Periodic rescan/reconnect every 30s (matches the original AppDelegate). The timer
+        // is scheduled on the main run loop, so the closure always fires on the main thread;
+        // `assumeIsolated` lets us call the @MainActor members directly without an async hop
+        // that could reorder relative to the synchronous teardown in shutDown().
+        scanTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.checkForBoseDevices()
+            }
+        }
+
+        // Poll noise-cancellation status every 10s while connected.
+        ncPollTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.isConnected {
+                    self.detectNoiseCancellationStatusAsync()
+                }
+            }
+        }
     }
 
     /// Synchronous termination teardown: the process exits right after this returns, so an
@@ -137,6 +165,13 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     /// and wait, so the channel is actually released before we terminate. Called from
     /// `applicationWillTerminate`.
     func shutDown() {
+        // Stop the periodic timers BEFORE tearing down the channel so a fired closure can't
+        // kick off a new scan/connect that races the synchronous teardown below.
+        scanTimer?.invalidate()
+        scanTimer = nil
+        ncPollTimer?.invalidate()
+        ncPollTimer = nil
+
         connectionNotification?.unregister()
         disconnectionNotification?.unregister()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -365,7 +400,11 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
                     }
 
                     self.deviceName = name
-                    self.isConnected = true
+                    // Note: do NOT set isConnected here. The device being paired+connected at
+                    // the OS level doesn't mean our RFCOMM control channel is open yet. The
+                    // authoritative set happens only after connectToBoseDeviceSync succeeds in
+                    // detectNoiseCancellationStatusAsync; a failed connect leaves it false so
+                    // the NC pills don't silently no-op against a non-existent channel.
                     // Show last-known-good static metadata instantly, before RFCOMM I/O.
                     if let address = device.addressString {
                         self.applyCachedMetadata(for: address)
@@ -401,11 +440,17 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
             guard self.connectToBoseDeviceSync(address: deviceAddr) else {
                 print(">>> Connection failed")
+                // A failed connect must not leave isConnected stuck true — otherwise the NC
+                // pills appear active but silently no-op against a non-existent channel.
+                Task { @MainActor [weak self] in
+                    self?.isConnected = false
+                }
                 return
             }
             print(">>> Connection successful, initializing Bose protocol...")
 
-            // Show connected state immediately.
+            // Authoritative connected state: only set true once the RFCOMM channel is
+            // confirmed open (connectToBoseDeviceSync returned success).
             Task { @MainActor [weak self] in
                 self?.isConnected = true
             }
@@ -1092,9 +1137,12 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            // Only update if we currently show as connected.
+            // Only update if we currently show as connected. Clear both isConnected and
+            // deviceName to stay consistent with the deviceDisconnected path (which clears
+            // both); leaving deviceName set would show a phantom device with no channel.
             if self.isConnected {
                 self.isConnected = false
+                self.deviceName = nil
             }
         }
     }
