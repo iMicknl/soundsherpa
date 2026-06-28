@@ -183,6 +183,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private var cachedAudioCodec: String?
     private var cachedServices: String?
     private var cachedLanguage: PromptLanguage?
+
+    // Persisted, address-keyed static metadata (firmware/serial/model/VID/PID/services).
+    // Survives relaunch so the Info submenu shows last-known-good values instantly on
+    // connect, even before a healthy RFCOMM channel is established.
+    private let metadataStore = DeviceMetadataStore(persistence: FileMetadataPersistence())
     private var cachedVoicePromptsEnabled: Bool?
     private var lastDataFetchTime: Date?
     private let cacheValidityDuration: TimeInterval = 30.0 // Cache is valid for 30 seconds
@@ -434,16 +439,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             updateVoicePromptsCheckmark(voicePrompts)
         }
         
-        // Show cached info items (only if we have some cached data)
-        if cachedFirmwareVersion != nil || cachedSerialNumber != nil || cachedAudioCodec != nil || cachedServices != nil {
-            updateInfoSubmenu(
-                firmware: cachedFirmwareVersion,
-                codec: cachedAudioCodec,
-                vendorId: nil,
-                productId: nil,
-                services: cachedServices,
-                serial: cachedSerialNumber
-            )
+        // Show persisted static metadata (firmware/serial/model/VID/PID/services).
+        if let address = deviceAddress {
+            applyCachedMetadata(for: address)
         }
         
         // Show cached paired devices
@@ -721,9 +719,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         serialItem.tag = 405
         submenu.addItem(serialItem)
         
+        // Audio codec is negotiated at the A2DP layer, not exposed by the Bose control
+        // protocol, and has no reliable macOS API. Hidden until/unless we have a real
+        // source for it (R5.8: no fabricated "Unknown" rows).
         let codecItem = NSMenuItem(title: "Audio Codec: Unknown", action: nil, keyEquivalent: "")
         codecItem.isEnabled = false
         codecItem.tag = 402
+        codecItem.isHidden = true
         submenu.addItem(codecItem)
         
         let deviceIdItem = NSMenuItem(title: "Device ID: Unknown", action: nil, keyEquivalent: "")
@@ -997,17 +999,64 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func updateInfoSubmenu(firmware: String?, codec: String?, vendorId: String?, productId: String?, services: String?, serial: String?) {
+        // Render each row from real data, hiding it entirely when we have nothing rather
+        // than printing a fabricated "Unknown" (per the reliability spec, R5.8).
+        updateInfoRow(tag: 401, label: "Firmware", value: firmware)
+        updateInfoRow(tag: 402, label: "Audio Codec", value: codec)
+        let deviceIdText: String?
+        if vendorId != nil || productId != nil {
+            deviceIdText = "\(vendorId ?? "?") / \(productId ?? "?")"
+        } else {
+            deviceIdText = nil
+        }
+        updateInfoRow(tag: 403, label: "Device ID", value: deviceIdText)
+        updateInfoRow(tag: 404, label: "Services", value: services)
+        updateInfoRow(tag: 405, label: "Serial Number", value: serial)
+    }
+
+    /// Sets an Info-submenu row's title, or hides it when `value` is nil/empty so the menu
+    /// never shows an "Unknown" placeholder for data we don't have.
+    private func updateInfoRow(tag: Int, label: String, value: String?) {
         guard let menu = statusItem?.menu,
               let settingsItem = menu.item(withTag: MenuTag.settingsSubmenu.rawValue),
-              let submenu = settingsItem.submenu else { return }
-        
-        submenu.item(withTag: 401)?.title = "Firmware: \(firmware ?? "Unknown")"
-        submenu.item(withTag: 402)?.title = "Audio Codec: \(codec ?? "Unknown")"
-        
-        let deviceIdText = "\(vendorId ?? "Unknown") / \(productId ?? "Unknown")"
-        submenu.item(withTag: 403)?.title = "Device ID: \(deviceIdText)"
-        submenu.item(withTag: 404)?.title = "Services: \(services ?? "Unknown")"
-        submenu.item(withTag: 405)?.title = "Serial Number: \(serial ?? "Unknown")"
+              let submenu = settingsItem.submenu,
+              let item = submenu.item(withTag: tag) else { return }
+
+        if let value = value, !value.isEmpty {
+            item.title = "\(label): \(value)"
+            item.isHidden = false
+        } else {
+            item.isHidden = true
+        }
+    }
+
+    /// Merge freshly-read static metadata into the persisted, address-keyed store so it
+    /// survives relaunch and shows instantly on the next connect.
+    private func storeMetadata(_ metadata: DeviceMetadata) {
+        guard let address = deviceAddress else { return }
+        metadataStore.put(metadata, for: address)
+    }
+
+    /// Populate the Info submenu from persisted metadata for the given address. Called on
+    /// connect before any RFCOMM I/O, so last-known-good values appear immediately.
+    private func applyCachedMetadata(for address: String) {
+        guard let meta = metadataStore.metadata(for: address) else { return }
+        if let firmware = meta.firmware { cachedFirmwareVersion = firmware }
+        if let serial = meta.serial { cachedSerialNumber = serial }
+
+        let deviceId: String?
+        if meta.vendorId != nil || meta.productId != nil {
+            deviceId = "\(meta.vendorId ?? "?") / \(meta.productId ?? "?")"
+        } else if let modelId = meta.modelId {
+            deviceId = String(format: "Bose 0x%04X", modelId)
+        } else {
+            deviceId = nil
+        }
+
+        updateInfoRow(tag: 401, label: "Firmware", value: meta.firmware)
+        updateInfoRow(tag: 403, label: "Device ID", value: deviceId)
+        updateInfoRow(tag: 404, label: "Services", value: meta.services?.joined(separator: ", "))
+        updateInfoRow(tag: 405, label: "Serial Number", value: meta.serial)
     }
     
     private func updatePairedDevicesMenu(_ devices: [PairedDeviceInfo], totalCount: Int, connectedCount: Int) {
@@ -1180,11 +1229,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                     )
                     
                     self.deviceAddress = device.addressString
-                    
+
+                    // Read host-side Bluetooth facts (VID/PID, services) that the Bose
+                    // control protocol can't provide, straight from the SDP records.
+                    let sdpMeta = self.sdpMetadata(for: device)
+                    if !sdpMeta.isEmpty, let address = device.addressString {
+                        self.metadataStore.put(sdpMeta, for: address)
+                    }
+
                     DispatchQueue.main.async {
                         self.updateMenuWithHeadphoneInfo(info)
+                        // Show last-known-good static metadata instantly, before RFCOMM I/O.
+                        if let address = device.addressString {
+                            self.applyCachedMetadata(for: address)
+                        }
                     }
-                    
+
                     // Start fetching detailed data via RFCOMM
                     self.detectNoiseCancellationStatusAsync()
                     return
@@ -1329,6 +1389,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         return connectToService(device: device, service: sppService)
     }
     
+    /// Extracts the host-side Bluetooth facts the Bose control protocol can't provide —
+    /// the advertised services list and the true Vendor/Product ID — from the device's
+    /// SDP records. Returns an empty `DeviceMetadata` when the records aren't available
+    /// (e.g. before an SDP query has completed); callers merge non-empty results only.
+    private func sdpMetadata(for device: IOBluetoothDevice) -> DeviceMetadata {
+        guard let records = device.services as? [IOBluetoothSDPServiceRecord] else {
+            return DeviceMetadata()
+        }
+
+        // Service names, de-duplicated, in a stable order.
+        var seen = Set<String>()
+        let serviceNames: [String] = records.compactMap { record in
+            guard let name = record.getServiceName(), !name.isEmpty,
+                  seen.insert(name).inserted else { return nil }
+            return name
+        }
+
+        // Device ID Profile: service class UUID 0x1200, VendorID = attr 0x0201,
+        // ProductID = attr 0x0202 (both 16-bit unsigned integers).
+        var vendorId: String?
+        var productId: String?
+        if let dipRecord = records.first(where: { $0.matchesUUID16(0x1200) }) {
+            vendorId = sdpUInt16Hex(dipRecord, attributeID: 0x0201)
+            productId = sdpUInt16Hex(dipRecord, attributeID: 0x0202)
+        }
+
+        return DeviceMetadata(
+            vendorId: vendorId,
+            productId: productId,
+            services: serviceNames.isEmpty ? nil : serviceNames
+        )
+    }
+
+    /// Reads a 16-bit unsigned SDP attribute and formats it as `0xXXXX`, or nil if absent.
+    private func sdpUInt16Hex(_ record: IOBluetoothSDPServiceRecord, attributeID: BluetoothSDPServiceAttributeID) -> String? {
+        guard let element = record.getAttributeDataElement(attributeID),
+              element.getTypeDescriptor() == kBluetoothSDPDataElementTypeUnsignedInt,
+              let number = element.getNumberValue() else { return nil }
+        return String(format: "0x%04X", number.uint16Value)
+    }
+
     private func connectToService(device: IOBluetoothDevice, service: IOBluetoothSDPServiceRecord) -> Bool {
         var channelId: BluetoothRFCOMMChannelID = BluetoothRFCOMMChannelID()
         let channelResult = service.getRFCOMMChannelID(&channelId)
@@ -1441,11 +1542,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         if waitResult == .timedOut {
             return true
         }
-        
-        if responseBuffer.count >= 4 && responseBuffer[0] == 0x00 && responseBuffer[1] == 0x01 {
-            return true
+
+        // The init reply carries the firmware version (function 0x01). We used to discard
+        // it; capture it via the pure codec instead so the Info submenu can show it.
+        if let firmware = BoseCodec.decodeFirmware(responseBuffer) {
+            cachedFirmwareVersion = firmware
+            storeMetadata(DeviceMetadata(firmware: firmware))
+            DispatchQueue.main.async {
+                self.updateInfoRow(tag: 401, label: "Firmware", value: firmware)
+            }
         }
-        
+
         return true
     }
 
@@ -1521,26 +1628,28 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func fetchSerialNumber() {
-        let command: [UInt8] = [0x00, 0x07, 0x01, 0x00]
-        let response = sendCommandAndWait(command: command, expectedPrefix: [0x00, 0x07])
-        
-        if response.count >= 4 && response[0] == 0x00 && response[1] == 0x07 && response[2] == 0x03 {
-            let length = Int(response[3])
-            if response.count >= 4 + length {
-                let serialBytes = Array(response[4..<(4 + length)])
-                if let serial = String(bytes: serialBytes, encoding: .utf8) {
-                    cachedSerialNumber = serial // Cache the serial number
-                    DispatchQueue.main.async {
-                        self.updateSerialInMenu(serial)
-                    }
-                }
+        let response = sendCommandAndWait(command: BoseCodec.encodeSerialQuery(),
+                                          expectedPrefix: [0x00, 0x07])
+
+        if let serial = BoseCodec.decodeSerial(response) {
+            cachedSerialNumber = serial // Cache the serial number
+            storeMetadata(DeviceMetadata(serial: serial))
+            DispatchQueue.main.async {
+                self.updateSerialInMenu(serial)
             }
         }
     }
     
     private func fetchDeviceStatus() {
-        let deviceIdCommand: [UInt8] = [0x00, 0x03, 0x01, 0x00]
-        _ = sendCommandAndWait(command: deviceIdCommand, expectedPrefix: [0x00, 0x03])
+        let deviceIdResponse = sendCommandAndWait(command: BoseCodec.encodeDeviceIdQuery(),
+                                                  expectedPrefix: [0x00, 0x03])
+        if let modelId = BoseCodec.decodeModelId(deviceIdResponse) {
+            storeMetadata(DeviceMetadata(modelId: modelId))
+            DispatchQueue.main.async {
+                self.updateInfoRow(tag: 403, label: "Device ID",
+                                   value: String(format: "Bose 0x%04X", modelId))
+            }
+        }
         
         let statusCommand: [UInt8] = [0x01, 0x01, 0x05, 0x00]
         
@@ -2018,7 +2127,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                         isConnected: isConnected,
                         firmwareVersion: firmwareVersion,
                         noiseCancellationEnabled: nil,
-                        audioCodec: determineAudioCodec(from: services),
+                        audioCodec: nil,
                         vendorId: vendorId,
                         productId: productId,
                         services: services,
@@ -2058,7 +2167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 isConnected: isConnected,
                 firmwareVersion: firmwareVersion,
                 noiseCancellationEnabled: nil,
-                audioCodec: determineAudioCodec(from: services),
+                audioCodec: nil,
                 vendorId: vendorId,
                 productId: productId,
                 services: services,
@@ -2082,17 +2191,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
     }
     
-    private func determineAudioCodec(from services: String?) -> String {
-        guard let services = services else { return "Unknown" }
-        if services.contains("A2DP") {
-            return "A2DP (High Quality)"
-        } else if services.contains("HFP") {
-            return "HFP (Voice)"
-        } else {
-            return "Standard"
-        }
-    }
-    
     private func updateMenuWithHeadphoneInfo(_ info: HeadphoneInfo) {
         currentHeadphoneInfo = info
         
@@ -2105,6 +2203,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             cachedSerialNumber = info.serialNumber
             cachedAudioCodec = info.audioCodec
             cachedServices = info.services
+
+            // Persist any static metadata this update carried (e.g. from the slow
+            // system_profiler path) so it survives relaunch like the SPP-sourced values.
+            let infoMeta = DeviceMetadata(
+                firmware: info.firmwareVersion,
+                serial: info.serialNumber,
+                vendorId: info.vendorId,
+                productId: info.productId,
+                services: info.services.map { [$0] }
+            )
+            if !infoMeta.isEmpty { storeMetadata(infoMeta) }
         } else {
             // Clear cached values when disconnected to save memory and avoid stale data
             cachedBatteryLevel = nil
