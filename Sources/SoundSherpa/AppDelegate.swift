@@ -180,6 +180,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     private let deviceRegistry = DeviceRegistry.standard
     private var activePlugin: DevicePlugin?
 
+    // All RFCOMM connect/teardown runs on this single serial queue so only one connection
+    // attempt touches the channel state (rfcommChannel/deviceChannel/isChannelReady/
+    // activePlugin) at a time. Previously each path hopped onto a fresh DispatchQueue.global
+    // thread, so the 30s scan timer, the 10s NC timer, and menu setters could drive two
+    // concurrent connects that raced over the device's single control channel — a latent
+    // contributor to the "detected but shows nothing" instability. It stays a GCD worker
+    // (not @MainActor): the blocking open/SDP query must run off the main thread, and the
+    // execution context is otherwise identical so IOBluetooth delegate delivery is unchanged.
+    private let connectionQueue = DispatchQueue(label: "nl.imick.soundsherpa.connection")
+
     // Incoming RFCOMM bytes are pushed here from the delegate callback (synchronously, so
     // arrival order is preserved) and drained by a single consumer task into the actor's
     // `ingest`. This keeps ordered delivery without spawning an unordered Task per chunk.
@@ -238,9 +248,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         disconnectionNotification?.unregister()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
 
-        closeChannel()
+        // Synchronous teardown: the process exits right after this returns, so an async
+        // closeChannel() hop onto connectionQueue might never run, orphaning the device's
+        // single control channel (the very failure we guard against). Run it inline on the
+        // queue and wait, so the channel is actually released before we terminate.
+        connectionQueue.sync { closeChannelLocked() }
     }
-    
+
     private func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         
@@ -1310,11 +1324,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
             return
         }
         
-        // The blocking IOBluetooth open + SDP query must run on a thread with a live run
-        // loop so the delegate callbacks are delivered (the documented root cause of the
-        // "shows nothing" bug). Keep that on the dedicated background queue. The command
-        // I/O afterward is serialized by the DeviceChannel actor and can run in a Task.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // The blocking IOBluetooth open + SDP query must run off the main thread so the
+        // delegate callbacks are delivered (the documented root cause of the "shows nothing"
+        // bug). Run it on the serial connectionQueue so concurrent scans/timers can't drive
+        // two connects at once. The command I/O afterward is serialized by the DeviceChannel
+        // actor and can run in a Task.
+        connectionQueue.async { [weak self] in
             guard let self = self else { return }
 
             print(">>> Starting connection to device: \(deviceAddr)")
@@ -1472,8 +1487,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
 
         // Close-before-open: the Bose control service permits exactly one RFCOMM connection.
         // If we hold a stale (non-open or leftover) channel, close it before opening a new one,
-        // otherwise the device refuses the connection and the menu shows no data.
-        closeChannel()
+        // otherwise the device refuses the connection and the menu shows no data. We're on
+        // connectionQueue here, so close inline (not via the async closeChannel hop).
+        closeChannelLocked()
         isChannelReady = false
 
         // First attempt. If it fails, the device may still consider a prior channel open
@@ -1513,8 +1529,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
                 attachChannel(ch)
                 return true
             }
-            // Async open did not complete cleanly — drop the half-open channel.
-            closeChannel()
+            // Async open did not complete cleanly — drop the half-open channel. Inline:
+            // we're already on connectionQueue.
+            closeChannelLocked()
         } else {
             channelOpenSemaphore = nil
         }
@@ -1552,10 +1569,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         }
     }
 
-    /// Close and release the RFCOMM channel if we hold one. Safe to call when there is none.
-    /// Centralizes teardown so every exit path (quit, sleep, disconnect, failed open) frees the
-    /// single Bose control channel instead of orphaning it.
+    /// External teardown entry point (quit, sleep, disconnect). Hops onto the serial
+    /// connectionQueue so a close can't race an in-flight connect over the channel state —
+    /// it always runs strictly before or after a connect, never interleaved.
     private func closeChannel() {
+        connectionQueue.async { [weak self] in
+            self?.closeChannelLocked()
+        }
+    }
+
+    /// Close and release the RFCOMM channel if we hold one. Safe to call when there is none.
+    /// Centralizes teardown so every exit path (quit, sleep, disconnect, failed open) frees
+    /// the single Bose control channel instead of orphaning it.
+    ///
+    /// MUST run on `connectionQueue`: callers are either external paths via `closeChannel()`
+    /// or the connect flow itself (close-before-open / failed-open cleanup), which already
+    /// runs on that queue.
+    private func closeChannelLocked() {
         if let channel = deviceChannel {
             Task { await channel.close() }   // fails any in-flight command with .channelClosed
         }
@@ -2324,7 +2354,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
     }
     
     private func attemptBluetoothConnection(address: String) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        connectionQueue.async { [weak self] in
             guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
                 return
             }
@@ -2524,7 +2554,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, IOBluetoothRFCOMMChannelDele
         guard let deviceAddr = deviceAddress else { return false }
 
         return await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            connectionQueue.async { [weak self] in
                 let result = self?.connectToBoseDeviceSync(address: deviceAddr) ?? false
                 continuation.resume(returning: result)
             }
