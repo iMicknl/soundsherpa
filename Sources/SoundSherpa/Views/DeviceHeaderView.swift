@@ -7,14 +7,9 @@ struct DeviceHeaderView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(.tint).frame(width: 30, height: 30)
-                Image(systemName: "headphones.over.ear")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
-            }
+            DeviceBadge(systemImage: "headphones.over.ear", isConnected: true)
             VStack(alignment: .leading, spacing: 1) {
-                Text(name).font(.subheadline.weight(.semibold))
+                Text(name).font(.body.weight(.semibold))
                 if let level = batteryLevel {
                     HStack(spacing: 4) {
                         Image(systemName: batterySymbol(level))
