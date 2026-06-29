@@ -23,7 +23,7 @@ struct MenuRow<Trailing: View>: View {
                 Spacer(minLength: 0)
                 trailing()
             }
-            .font(.subheadline)
+            .font(.body)
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
