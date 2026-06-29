@@ -225,6 +225,11 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             print("Bose device connected: \(device.name ?? "Unknown")")
             currentBoseDevice = device
             setupDeviceSpecificNotifications(for: device)
+            // Reconnect (e.g. after a Bluetooth toggle, or powering the headphones on) should
+            // surface in the UI immediately, not on the next 30s scan tick. The connection may
+            // be stale relative to our cache, so force a fresh fetch, then re-scan now.
+            lastDataFetchTime = nil
+            checkForBoseDevices()
         }
     }
 
