@@ -4,9 +4,9 @@ import SwiftUI
 /// full-width, leading label (with optional leading glyph), an optional trailing
 /// accessory, and a subtle rounded highlight on hover. Used for "More", the footer
 /// actions, and the paired-device rows so they all feel like real system rows.
-struct MenuRow<Trailing: View>: View {
+struct MenuRow<Leading: View, Trailing: View>: View {
     let title: String
-    var systemImage: String?
+    @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
     let action: () -> Void
 
@@ -15,10 +15,7 @@ struct MenuRow<Trailing: View>: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                if let systemImage {
-                    Image(systemName: systemImage)
-                        .frame(width: 20)
-                }
+                leading()
                 Text(title)
                 Spacer(minLength: 0)
                 trailing()
@@ -37,9 +34,39 @@ struct MenuRow<Trailing: View>: View {
     }
 }
 
-/// Convenience for rows with no trailing accessory.
-extension MenuRow where Trailing == EmptyView {
+// Convenience: SF Symbol leading glyph (or none), no trailing.
+extension MenuRow where Leading == AnyView, Trailing == EmptyView {
     init(title: String, systemImage: String? = nil, action: @escaping () -> Void) {
-        self.init(title: title, systemImage: systemImage, trailing: { EmptyView() }, action: action)
+        self.init(
+            title: title,
+            leading: {
+                AnyView(Group {
+                    if let systemImage {
+                        Image(systemName: systemImage).frame(width: 20)
+                    }
+                })
+            },
+            trailing: { EmptyView() },
+            action: action)
+    }
+}
+
+// Convenience: SF Symbol leading glyph (or none), custom trailing.
+extension MenuRow where Leading == AnyView {
+    init(title: String,
+         systemImage: String? = nil,
+         @ViewBuilder trailing: @escaping () -> Trailing,
+         action: @escaping () -> Void) {
+        self.init(
+            title: title,
+            leading: {
+                AnyView(Group {
+                    if let systemImage {
+                        Image(systemName: systemImage).frame(width: 20)
+                    }
+                })
+            },
+            trailing: trailing,
+            action: action)
     }
 }

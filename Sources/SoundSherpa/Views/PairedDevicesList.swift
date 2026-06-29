@@ -14,12 +14,12 @@ struct PairedDevicesList: View {
                 ForEach(devices, id: \.address) { device in
                     MenuRow(
                         title: DeviceDisplay.pairedDeviceDisplayName(rawName: device.name, address: device.address),
-                        systemImage: iconName(for: device),
-                        trailing: {
-                            if device.isConnected {
-                                Circle().fill(.tint).frame(width: 7, height: 7)
-                            }
+                        leading: {
+                            DeviceBadge(systemImage: iconName(for: device),
+                                        isConnected: device.isConnected,
+                                        diameter: 28)
                         },
+                        trailing: { EmptyView() },
                         action: { onToggle(device) })
                 }
             }
