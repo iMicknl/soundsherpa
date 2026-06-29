@@ -694,7 +694,11 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             Task { await channel.close() }   // fails any in-flight command with .channelClosed
         }
         deviceChannel = nil
-        activePlugin = nil
+        // NOTE: do NOT clear activePlugin here. It is brand identity resolved from the
+        // device name, not channel state, and it must survive the close-before-open cycle
+        // that connectToService performs on every connect. Clearing it here left
+        // activePlugin nil by the time fetchBatteryLevel ran, so battery never populated.
+        // It's re-resolved on the next detection/connect anyway.
         ingestContinuation?.finish()
         ingestContinuation = nil
         if let channel = rfcommChannel {
