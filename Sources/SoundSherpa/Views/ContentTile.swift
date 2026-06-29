@@ -8,7 +8,8 @@ struct ContentTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             DeviceHeaderView(name: controller.deviceName ?? "No device connected",
-                             batteryLevel: controller.batteryLevel)
+                             batteryLevel: controller.batteryLevel,
+                             isConnected: controller.isConnected)
 
             if controller.isConnected {
                 Divider()
