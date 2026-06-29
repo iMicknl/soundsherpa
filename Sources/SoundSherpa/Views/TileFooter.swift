@@ -6,14 +6,14 @@ struct TileFooter: View {
 
     var body: some View {
         VStack(spacing: 1) {
-            MenuRow(title: "Refresh", systemImage: "arrow.clockwise") { controller.refresh() }
-            MenuRow(title: "Advanced Settings…", systemImage: "gearshape") {
+            MenuRow(title: "Refresh") { controller.refresh() }
+            MenuRow(title: "Advanced Settings…") {
                 openSettings()
                 // LSUIElement (.accessory) apps never become active on their own, so the
                 // Settings window would open behind other apps. Activate to pull it forward.
                 NSApp.activate(ignoringOtherApps: true)
             }
-            MenuRow(title: "Quit SoundSherpa", systemImage: "power") {
+            MenuRow(title: "Quit SoundSherpa") {
                 NSApplication.shared.terminate(nil)
             }
         }
