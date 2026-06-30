@@ -19,7 +19,7 @@ struct SoundSherpaApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            AdvancedSettingsView()
+            SettingsView()
                 .environment(controller)
         }
     }
