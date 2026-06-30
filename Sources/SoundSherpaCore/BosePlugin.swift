@@ -154,6 +154,12 @@ public struct BosePlugin: DevicePlugin {
 
 /// A tiny reference box so the value-type BosePlugin can carry mutable last-language state
 /// across the channel's async boundaries without becoming a class itself.
+///
+/// SAFETY (`@unchecked Sendable`): this box has no internal synchronization. It is safe ONLY
+/// because a single BosePlugin value is driven over one `DeviceChannel` actor, which
+/// serializes every `apply`/`readState` call — so reads/writes of `value` never overlap. Do
+/// NOT read or write `lastLanguageByte` outside that serialized call path, and do not share
+/// one channel across plugin instances, or this becomes a data race.
 private final class LanguageBox: @unchecked Sendable {
     var value: UInt8?
 }
