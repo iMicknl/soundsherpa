@@ -1,6 +1,6 @@
 import AppKit
 import Foundation
-import IOBluetooth
+@preconcurrency import IOBluetooth
 import Observation
 import SoundSherpaCore
 
@@ -134,6 +134,30 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     /// Register Bluetooth connect/disconnect + sleep/wake observers and run the initial scan.
     /// Called from `applicationDidFinishLaunching`.
     func startMonitoring() {
+        // DEADLOCK GUARD (do not inline back onto the main thread): the FIRST IOBluetooth
+        // call lazily cold-inits `IOBluetoothCoreBluetoothCoordinator`, which spins up a
+        // CBCentralManager and blocks on a semaphore until CoreBluetooth delivers its first
+        // state update — and that update is dispatched on the MAIN queue. If the first call
+        // runs on the main thread (here, inside applicationDidFinishLaunching), the main queue
+        // is parked inside that semaphore wait, the state callback can never run, and the app
+        // hangs with the menu showing nothing. (Confirmed via a main-thread stack sample:
+        // registerForConnectNotifications → coordinator init → semaphore_wait_trap.) It was
+        // intermittent only because a background `pairedDevices()` sometimes warmed the
+        // coordinator first. So warm it OFF the main thread, leaving the main run loop free to
+        // service the callback, then finish setup on the main thread once it's ready.
+        connectionQueue.async { [weak self] in
+            _ = IOBluetoothDevice.pairedDevices()   // forces coordinator cold-init off-main
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self?.finishStartMonitoring() }
+            }
+        }
+    }
+
+    /// Second half of `startMonitoring`, run on the main thread after the IOBluetooth
+    /// coordinator has been warmed off-main. Registering the connect/disconnect notifications
+    /// must happen on a thread with a live run loop (the main thread), or the callbacks never
+    /// fire — hence this can't move onto `connectionQueue`.
+    private func finishStartMonitoring() {
         setupBluetoothNotifications()
         setupSleepWakeNotifications()
         checkForBoseDevices()
@@ -186,13 +210,33 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     }
 
     /// Register for disconnection notifications on the specific device, only if we don't
-    /// already have one registered. `nonisolated` so the connect flow (on connectionQueue,
-    /// off the main actor) can arm it during `connectToBoseDeviceSync`, exactly as the old
-    /// AppDelegate did. Touches only the `nonisolated(unsafe)` `disconnectionNotification`.
+    /// already have one registered.
+    ///
+    /// MUST register on the MAIN thread: IOBluetooth user-notification callbacks are delivered
+    /// on the run loop of the thread that registered them, and `connectionQueue` (the usual
+    /// caller, via `connectToBoseDeviceSync`) is a GCD worker with NO run loop — same hazard as
+    /// the startup-deadlock fix. A disconnect notification armed there never fires, so a power-off
+    /// surfaces only on the next 30s scan instead of immediately. Marshalling onto the main run
+    /// loop (where the connect notification is also registered) makes `deviceDisconnected` fire
+    /// directly. Routing the nil-check through the main thread too keeps the single-registration
+    /// guard race-free. Touches only the `nonisolated(unsafe)` `disconnectionNotification`.
     nonisolated private func setupDeviceSpecificNotifications(for device: IOBluetoothDevice) {
-        if disconnectionNotification == nil {
-            disconnectionNotification = device.register(forDisconnectNotification: self, selector: #selector(deviceDisconnected(_:device:)))
+        if Thread.isMainThread {
+            armDisconnectNotification(for: device)
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.armDisconnectNotification(for: device) }
         }
+    }
+
+    /// Register the disconnect notification on the main run loop. Always called on the main
+    /// thread (see `setupDeviceSpecificNotifications`). The `nil` guard makes registration
+    /// idempotent; running it on a single thread keeps that guard race-free. `nonisolated`
+    /// because it touches only the `nonisolated(unsafe)` `disconnectionNotification`, like the
+    /// rest of the channel/notification state in this file.
+    nonisolated private func armDisconnectNotification(for device: IOBluetoothDevice) {
+        guard disconnectionNotification == nil else { return }
+        disconnectionNotification = device.register(forDisconnectNotification: self,
+                                                    selector: #selector(deviceDisconnected(_:device:)))
     }
 
     /// Observe system sleep/wake. On sleep we close our RFCOMM channel so we don't leave the
@@ -247,6 +291,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             // Reflect disconnected state in the UI.
             self.isConnected = false
             self.deviceName = nil
+            self.batteryLevel = nil
         }
     }
 
@@ -256,10 +301,6 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     }
 
     // MARK: - Intents
-
-    func refresh() {
-        checkForBoseDevices()
-    }
 
     func setNoiseCancellation(_ level: NoiseCancellationLevel) {
         Task { [weak self] in
@@ -427,6 +468,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         // No connected Bose device found.
         self.isConnected = false
         self.deviceName = nil
+        self.batteryLevel = nil
     }
 
     private func detectNoiseCancellationStatusAsync() {
@@ -1146,6 +1188,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             if self.isConnected {
                 self.isConnected = false
                 self.deviceName = nil
+                self.batteryLevel = nil
             }
         }
     }
