@@ -20,8 +20,9 @@ struct SettingsView: View {
             deviceTab.tabItem { Label("Device", systemImage: "headphones") }.tag(Tab.device)
             aboutTab.tabItem { Label("About", systemImage: "info.circle") }.tag(Tab.about)
         }
-        .frame(width: 420, height: 320)
-        .padding()
+        // Sized so the busiest tab (Device, when connected) fits without scrolling;
+        // the grouped Form and TabView supply their own insets, so no outer padding.
+        .frame(width: 460, height: 540)
         // The Settings scene's view tree persists across window close/reopen, so the
         // TabView would otherwise reopen on whatever tab was last viewed. Reset to
         // General when the window closes so the next open always starts there.
@@ -171,14 +172,14 @@ struct SettingsView: View {
             }
 
             Text("Smart controls for non-Apple headphones.")
-                .font(.headline)
+                .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
 
             Text("SoundSherpa brings the Control Center experience to all headphones, "
                 + "not just Apple ones. Manage noise cancellation, battery, connections, "
                 + "and device switching from your menu bar — no more guessing, no more "
                 + "digging through menus.")
-                .font(.callout)
+                .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
