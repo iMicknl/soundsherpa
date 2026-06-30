@@ -228,3 +228,22 @@ final class BosePluginTests: XCTestCase {
         XCTAssertNil(s.buttonAction)
     }
 }
+
+extension BosePluginTests {
+    func testDeviceIdLabelFormatsWithBrand() {
+        XCTAssertEqual(BosePlugin().deviceIdLabel(modelId: 0x4014), "Bose 0x4014")
+    }
+
+    func testDecodeUnsolicitedNCBroadcast() {
+        // Bose NC broadcast [0x01,0x06,0x03,0x01,<level>] -> a noiseCancellation change.
+        let change = BosePlugin().decodeUnsolicited([0x01, 0x06, 0x03, 0x01, 0x01])
+        guard case .noiseCancellation(let level)? = change else {
+            return XCTFail("expected a noiseCancellation change")
+        }
+        XCTAssertEqual(level, .high)
+    }
+
+    func testDecodeUnsolicitedIgnoresUnrelated() {
+        XCTAssertNil(BosePlugin().decodeUnsolicited([0x02, 0x02, 0x03, 0x01, 0x5A]))
+    }
+}

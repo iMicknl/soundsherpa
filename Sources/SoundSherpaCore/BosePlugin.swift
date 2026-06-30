@@ -132,6 +132,13 @@ public struct BosePlugin: DevicePlugin {
         }
     }
 
+    public func decodeUnsolicited(_ bytes: [UInt8]) -> DeviceChange? {
+        // Unsolicited NC status: [0x01, 0x06, <0x03|0x04>, …, <level at index 4>].
+        guard bytes.count >= 5, bytes[0] == 0x01, bytes[1] == 0x06,
+              let level = NoiseCancellationLevel(byte: bytes[4]) else { return nil }
+        return .noiseCancellation(level)
+    }
+
     // MARK: - Private
 
     /// Send `command` and treat any reply matching `prefix` as an acknowledgement. A timeout /

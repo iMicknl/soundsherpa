@@ -46,4 +46,20 @@ public protocol DevicePlugin: Sendable {
     /// Apply one typed mutation. Returns whether the device acknowledged it. Never throws;
     /// returns false for unsupported changes or on timeout / closed channel.
     func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool
+
+    /// Human-readable device-id label for a brand-specific model code, shown in the Info row.
+    /// Default formats as "<identifier> 0xNNNN"; a brand may override for a nicer label.
+    func deviceIdLabel(modelId: Int) -> String
+
+    /// Decode an unsolicited broadcast frame (e.g. ANC changed via an on-device button) into a
+    /// `DeviceChange` the controller can reflect in the UI, or nil if the bytes aren't one.
+    func decodeUnsolicited(_ bytes: [UInt8]) -> DeviceChange?
+}
+
+public extension DevicePlugin {
+    func deviceIdLabel(modelId: Int) -> String {
+        String(format: "\(identifier) 0x%04X", modelId)
+    }
+
+    func decodeUnsolicited(_ bytes: [UInt8]) -> DeviceChange? { nil }
 }
