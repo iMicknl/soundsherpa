@@ -103,4 +103,82 @@ final class BosePluginTests: XCTestCase {
         XCTAssertFalse(f.contains(.equalizer))
         XCTAssertFalse(f.contains(.ambientLevel))
     }
+
+    // MARK: - apply (write byte-parity)
+
+    func testApplyNoiseCancellationWritesExactBytes() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+
+        async let ok = plugin.apply(.noiseCancellation(.high), over: channel)
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest([0x01, 0x06, 0x03, 0x01, 0x01]) // ACK
+        let result = await ok
+        XCTAssertTrue(result)
+        let writes = await transport.writes
+        XCTAssertEqual(writes, [[0x01, 0x06, 0x02, 0x01, 0x01]])
+    }
+
+    func testApplySelfVoiceWritesExactBytes() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+
+        async let ok = plugin.apply(.selfVoice(.medium), over: channel)
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest([0x01, 0x0b, 0x03, 0x01, 0x02]) // ACK
+        _ = await ok
+        let writes = await transport.writes
+        XCTAssertEqual(writes, [[0x01, 0x0b, 0x02, 0x02, 0x01, 0x02, 0x38]])
+    }
+
+    func testApplyAutoOffWritesExactBytes() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+
+        async let ok = plugin.apply(.autoOff(.twenty), over: channel)
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest([0x01, 0x04, 0x03, 0x01, 0x14]) // ACK
+        _ = await ok
+        let writes = await transport.writes
+        XCTAssertEqual(writes, [[0x01, 0x04, 0x02, 0x01, 0x14]])
+    }
+
+    func testApplyButtonActionWritesExactBytes() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+
+        async let ok = plugin.apply(.buttonAction(.alexa), over: channel)
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest([0x01, 0x09, 0x03, 0x04, 0x10, 0x04, 0x01, 0x07]) // ACK
+        _ = await ok
+        let writes = await transport.writes
+        XCTAssertEqual(writes, [[0x01, 0x09, 0x02, 0x03, 0x10, 0x04, 0x01]])
+    }
+
+    func testApplyLanguageWritesExactBytes() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+
+        async let ok = plugin.apply(.promptLanguage(.french), over: channel)
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest([0x01, 0x03, 0x03, 0x01, 0x22]) // ACK
+        _ = await ok
+        let writes = await transport.writes
+        // French = 0x22; voice-prompt high bit not set by a bare language change.
+        XCTAssertEqual(writes, [[0x01, 0x03, 0x02, 0x01, 0x22]])
+    }
+
+    func testApplyReturnsFalseOnTimeout() async {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+        // No ACK ingested → the send times out → apply reports false, never throws.
+        let result = await plugin.apply(.noiseCancellation(.off), over: channel)
+        XCTAssertFalse(result)
+    }
 }

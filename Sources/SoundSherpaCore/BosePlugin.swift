@@ -10,6 +10,15 @@ import Foundation
 public struct BosePlugin: DevicePlugin {
     public let identifier = "Bose"
 
+    // Tracks the last-seen language byte (incl. voice-prompt high bit) so a voice-prompt
+    // toggle can preserve the chosen language — the role the old controller's
+    // `currentLanguageValue` played. Boxed because BosePlugin is a Sendable value type.
+    private let languageBox = LanguageBox()
+    private var lastLanguageByte: UInt8? {
+        get { languageBox.value }
+        nonmutating set { languageBox.value = newValue }
+    }
+
     public init() {}
 
     public func handles(deviceNamed name: String) -> Bool {
@@ -69,10 +78,42 @@ public struct BosePlugin: DevicePlugin {
     }
 
     public func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool {
-        false
+        switch change {
+        case .noiseCancellation(let level):
+            return await acked(BoseCodec.encodeNoiseCancellation(level),
+                               prefix: [0x01, 0x06], over: channel)
+        case .selfVoice(let level):
+            return await acked(BoseCodec.encodeSelfVoice(level),
+                               prefix: [0x01, 0x0b], over: channel)
+        case .autoOff(let value):
+            return await acked(BoseCodec.encodeAutoOff(value),
+                               prefix: [0x01, 0x04], over: channel)
+        case .buttonAction(let value):
+            return await acked(BoseCodec.encodeButtonAction(value),
+                               prefix: [0x01, 0x09], over: channel)
+        case .promptLanguage(let value):
+            return await acked(BoseCodec.encodeLanguage(value.rawValue),
+                               prefix: [0x01, 0x03], over: channel)
+        case .voicePrompts(let on):
+            // Preserve the currently-selected language; toggle only the high bit.
+            let base = (lastLanguageByte ?? PromptLanguage.english.rawValue) & 0x7F
+            let byte = on ? (base | 0x80) : base
+            return await acked(BoseCodec.encodeLanguage(byte),
+                               prefix: [0x01, 0x03], over: channel)
+        case .anc, .equalizer:
+            // Bose does not use the generic ANC/EQ model in this sub-project.
+            return false
+        }
     }
 
     // MARK: - Private
+
+    /// Send `command` and treat any reply matching `prefix` as an acknowledgement. A timeout /
+    /// closed channel yields false — never a throw — matching the plugin no-throw contract.
+    private func acked(_ command: [UInt8], prefix: [UInt8], over channel: DeviceChannel) async -> Bool {
+        let reply = (try? await channel.send(command, matcher: .prefix(prefix), timeout: 0.5)) ?? []
+        return !reply.isEmpty
+    }
 
     /// Send `command` and await the reply identified by `prefix`, returning the reply bytes
     /// or an empty array on timeout / closed channel. Swallowing the `DeviceError` here lets
@@ -83,4 +124,10 @@ public struct BosePlugin: DevicePlugin {
                                timeout: TimeInterval = 0.5) async -> [UInt8] {
         (try? await channel.send(command, matcher: .prefix(prefix), timeout: timeout)) ?? []
     }
+}
+
+/// A tiny reference box so the value-type BosePlugin can carry mutable last-language state
+/// across the channel's async boundaries without becoming a class itself.
+private final class LanguageBox: @unchecked Sendable {
+    var value: UInt8?
 }
