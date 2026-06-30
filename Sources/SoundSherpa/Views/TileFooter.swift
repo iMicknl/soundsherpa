@@ -15,5 +15,8 @@ struct TileFooter: View {
                 NSApplication.shared.terminate(nil)
             }
         }
+        // Bleed the hover pills outward toward the tile edges while keeping the labels
+        // aligned with the rows above (inset bumped +6 to counteract the -6 padding).
+        .padding(.horizontal, -6)
     }
 }

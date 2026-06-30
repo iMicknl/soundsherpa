@@ -24,6 +24,9 @@ struct PairedDevicesList: View {
                         action: { onToggle(device) })
                 }
             }
+            // Bleed the hover pills outward toward the tile edges while keeping the
+            // badge/label aligned with the rows above (inset bumped +6 to offset -6).
+            .padding(.horizontal, -6)
         }
     }
 

@@ -38,9 +38,10 @@ struct MenuRow<Leading: View, Trailing: View>: View {
 
 // Convenience: SF Symbol leading glyph (or none), no trailing.
 extension MenuRow where Leading == AnyView, Trailing == EmptyView {
-    init(title: String, systemImage: String? = nil, action: @escaping () -> Void) {
+    init(title: String, horizontalInset: CGFloat = 7, systemImage: String? = nil, action: @escaping () -> Void) {
         self.init(
             title: title,
+            horizontalInset: horizontalInset,
             leading: {
                 AnyView(Group {
                     if let systemImage {

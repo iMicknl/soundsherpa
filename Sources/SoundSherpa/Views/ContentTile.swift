@@ -33,12 +33,16 @@ struct ContentTile: View {
 
                 // Native-style disclosure: a full-width row with a trailing chevron that
                 // rotates when expanded, revealing the advanced controls inline.
-                MenuRow(title: "More", titleFont: .system(size: 12, weight: .semibold), horizontalInset: 2, trailing: {
+                MenuRow(title: "More", titleFont: .system(size: 12, weight: .semibold), horizontalInset: 8, trailing: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .rotationEffect(.degrees(showMore ? 90 : 0))
                 }, action: { withAnimation(.easeInOut(duration: 0.18)) { showMore.toggle() } })
+                // Bleed the hover pill outward toward the tile edges while keeping the
+                // label/chevron visually aligned with the rows above (inset bumped +6 to
+                // counteract the -6 padding). Native menu-row idiom.
+                .padding(.horizontal, -6)
 
                 if showMore {
                     PairedDevicesList(devices: controller.pairedDevices) { device in
@@ -54,7 +58,9 @@ struct ContentTile: View {
             Divider()
             TileFooter()
         }
-        .padding(12)
+        .padding(.top, 12)
+        .padding(.bottom, 6)
+        .padding(.horizontal, 10)
         .frame(width: 280)
         .tint(.accentColor)
     }
