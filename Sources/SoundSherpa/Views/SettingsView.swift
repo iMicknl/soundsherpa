@@ -40,41 +40,125 @@ struct SettingsView: View {
 
     private var deviceTab: some View {
         Form {
-            Picker("Auto-Off", selection: Binding(
-                get: { controller.autoOff ?? .never },
-                set: { controller.setAutoOff($0) })) {
-                ForEach([AutoOff.never, .five, .twenty, .forty, .sixty, .oneEighty], id: \.rawValue) {
-                    Text($0.displayName).tag($0)
+            // Which device these controls apply to — surfaced because a user may
+            // have several headphones paired and switch between them.
+            Section {
+                LabeledContent("Device", value: controller.deviceName ?? "Not connected")
+            }
+
+            Section("Controls") {
+                Picker("Auto-Off", selection: Binding(
+                    get: { controller.autoOff ?? .never },
+                    set: { controller.setAutoOff($0) })) {
+                    ForEach([AutoOff.never, .five, .twenty, .forty, .sixty, .oneEighty], id: \.rawValue) {
+                        Text($0.displayName).tag($0)
+                    }
+                }
+                Picker("Button Action", selection: Binding(
+                    get: { controller.buttonAction ?? .noiseCancellation },
+                    set: { controller.setButtonAction($0) })) {
+                    Text("Alexa").tag(ButtonAction.alexa)
+                    Text("Noise Cancellation").tag(ButtonAction.noiseCancellation)
+                }
+                Picker("Language", selection: Binding(
+                    get: { controller.language ?? .english },
+                    set: { controller.setLanguage($0) })) {
+                    ForEach(languageChoices, id: \.rawValue) { Text($0.displayName).tag($0) }
+                }
+                Toggle("Voice Prompts", isOn: Binding(
+                    get: { controller.voicePromptsEnabled ?? false },
+                    set: { controller.setVoicePrompts($0) }))
+            }
+
+            // Read-only device identity, moved here from About (nil → row hidden).
+            if hasDeviceInfo {
+                Section("Information") {
+                    if let v = controller.firmware { LabeledContent("Firmware", value: v) }
+                    if let v = controller.serial { LabeledContent("Serial Number", value: v) }
+                    if let v = controller.deviceId { LabeledContent("Device ID", value: v) }
+                    if let v = controller.services, !v.isEmpty {
+                        LabeledContent("Services", value: v.joined(separator: ", "))
+                    }
                 }
             }
-            Picker("Button Action", selection: Binding(
-                get: { controller.buttonAction ?? .noiseCancellation },
-                set: { controller.setButtonAction($0) })) {
-                Text("Alexa").tag(ButtonAction.alexa)
-                Text("Noise Cancellation").tag(ButtonAction.noiseCancellation)
-            }
-            Picker("Language", selection: Binding(
-                get: { controller.language ?? .english },
-                set: { controller.setLanguage($0) })) {
-                ForEach(languageChoices, id: \.rawValue) { Text($0.displayName).tag($0) }
-            }
-            Toggle("Voice Prompts", isOn: Binding(
-                get: { controller.voicePromptsEnabled ?? false },
-                set: { controller.setVoicePrompts($0) }))
         }
     }
 
+    private var hasDeviceInfo: Bool {
+        controller.firmware != nil || controller.serial != nil
+            || controller.deviceId != nil || !(controller.services ?? []).isEmpty
+    }
+
     private var aboutTab: some View {
-        Form {
-            if let v = controller.firmware { LabeledContent("Firmware", value: v) }
-            if let v = controller.serial { LabeledContent("Serial Number", value: v) }
-            if let v = controller.deviceId { LabeledContent("Device ID", value: v) }
-            if let v = controller.services, !v.isEmpty {
-                LabeledContent("Services", value: v.joined(separator: ", "))
+        VStack(spacing: 12) {
+            appLogo
+                .frame(width: 96, height: 96)
+                .accessibilityLabel("SoundSherpa")
+
+            VStack(spacing: 2) {
+                Text(appName)
+                    .font(.title2.weight(.semibold))
+                Text("Version \(appVersion)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-            Text("Smart controls for non-Apple headphones. Version 1.0")
-                .font(.footnote).foregroundStyle(.secondary)
+
+            Text("Smart controls for non-Apple headphones.")
+                .font(.headline)
+                .multilineTextAlignment(.center)
+
+            Text("SoundSherpa brings the Control Center experience to all headphones, "
+                + "not just Apple ones. Manage noise cancellation, battery, connections, "
+                + "and device switching from your menu bar — no more guessing, no more "
+                + "digging through menus.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 24)
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Link("Visit Website", destination: URL(string: "https://soundsherpa.app")!)
+                Text("© 2026 Mick Vleeshouwer")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         }
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity)
+    }
+
+    /// The app's bundled icon when present, otherwise the headphones glyph the
+    /// rest of the UI uses, so the About panel always shows a recognizable mark.
+    /// `applicationIconImage` returns a generic placeholder when no icon is
+    /// bundled, so gate on the Info.plist actually declaring one.
+    @ViewBuilder private var appLogo: some View {
+        if hasBundledIcon, let icon = NSApp.applicationIconImage {
+            Image(nsImage: icon)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Image(systemName: "headphones")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .foregroundStyle(.tint)
+                .padding(8)
+        }
+    }
+
+    private var hasBundledIcon: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") != nil
+            || Bundle.main.object(forInfoDictionaryKey: "CFBundleIconFile") != nil
+    }
+
+    private var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "SoundSherpa"
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
     }
 
     private var languageChoices: [PromptLanguage] {
