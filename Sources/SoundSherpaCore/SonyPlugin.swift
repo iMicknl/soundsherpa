@@ -40,17 +40,26 @@ public struct SonyPlugin: DevicePlugin {
 
     // MARK: - Framed send
 
+    /// Frame `payload`, send it, and return the decoded `SonyFrame` (or nil on timeout/closed/
+    /// undecodable). This is the single shared primitive for framed I/O — all framed sends go
+    /// through here to avoid duplicating frame/send/decode logic.
+    private func sendFramedFrame(_ payload: [UInt8],
+                                 over channel: DeviceChannel,
+                                 timeout: TimeInterval = 0.5) async -> SonyFrame? {
+        let frame = SonyFraming.encode(type: .command1, seq: versionBox.seq, payload: payload)
+        guard let reply = try? await channel.send(frame, matcher: .prefix([0x3E]), timeout: timeout) else {
+            return nil
+        }
+        return SonyFraming.decode(reply)
+    }
+
     /// Frame `payload`, send it, and return the DECODED reply frame's payload (or [] on
     /// timeout/closed). All Sony frames start with 0x3E, so we match on that prefix. Swallows
     /// DeviceError to [] per the no-throw plugin contract.
     private func sendFramed(_ payload: [UInt8],
                             over channel: DeviceChannel,
                             timeout: TimeInterval = 0.5) async -> [UInt8] {
-        let seq = versionBox.seq
-        let frame = SonyFraming.encode(type: .command1, seq: seq, payload: payload)
-        let reply = (try? await channel.send(frame, matcher: .prefix([0x3E]), timeout: timeout)) ?? []
-        guard let decoded = SonyFraming.decode(reply) else { return [] }
-        return decoded.payload
+        (await sendFramedFrame(payload, over: channel, timeout: timeout))?.payload ?? []
     }
 
     /// Negotiate (and cache) the dialect once per channel. Returns nil if the device never
@@ -110,13 +119,9 @@ public struct SonyPlugin: DevicePlugin {
             // Bose-only changes; Sony does not handle them.
             return false
         }
-        // Send the framed command and check if we got *any* reply frame (even with empty payload).
-        // Unlike sendFramed which returns the decoded payload, we need the raw bytes here to
-        // distinguish "got an ACK with empty payload" from "timeout/no reply".
-        let seq = versionBox.seq
-        let frame = SonyFraming.encode(type: .command1, seq: seq, payload: payload)
-        let reply = (try? await channel.send(frame, matcher: .prefix([0x3E]), timeout: 0.5)) ?? []
-        return !reply.isEmpty   // any framed reply within the window is treated as an ACK
+        // Send the framed command and treat "a frame came back" as the ACK (even with empty payload).
+        let acked = await sendFramedFrame(payload, over: channel, timeout: 0.5) != nil
+        return acked
     }
 }
 
