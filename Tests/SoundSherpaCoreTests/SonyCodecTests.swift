@@ -178,3 +178,30 @@ extension SonyCodecTests {
         XCTAssertNil(SonyCodec.decodeEQ([], version: .v1))
     }
 }
+
+extension SonyCodecTests {
+
+    // MARK: - Firmware (asserted request V1 0x04 0x02; reply NEEDS-HARDWARE)
+    func testFirmwareQueryV1() {
+        XCTAssertEqual(SonyCodec.encodeFirmwareQuery(version: .v1), [0x04, 0x02])
+    }
+
+    func testFirmwareQueryV2() {
+        // V2 firmware request not asserted upstream; we send the V1 code as a best effort.
+        // VERIFY ON HARDWARE.
+        XCTAssertEqual(SonyCodec.encodeFirmwareQuery(version: .v2), [0x04, 0x02])
+    }
+
+    // NEEDS-HARDWARE: handleFirmwareVersion is a stub upstream. Fixture assumes response type
+    // 0x05 (request+1) carrying ASCII. VERIFY ON HARDWARE.
+    func testDecodeFirmwareFromAsciiReply() {
+        // "1.0.4" = 0x31 0x2E 0x30 0x2E 0x34
+        let payload: [UInt8] = [0x05, 0x00, 0x31, 0x2E, 0x30, 0x2E, 0x34]
+        XCTAssertEqual(SonyCodec.decodeFirmware(payload, version: .v1), "1.0.4")
+    }
+
+    func testDecodeFirmwareRejectsWrongPrefix() {
+        XCTAssertNil(SonyCodec.decodeFirmware([0x99, 0x00], version: .v1))
+        XCTAssertNil(SonyCodec.decodeFirmware([], version: .v1))
+    }
+}

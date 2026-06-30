@@ -123,4 +123,18 @@ public enum SonyCodec {
         let bands = payload[4..<(4 + count)].map { Int($0) - 10 }
         return EqualizerState(presetId: presetId, bands: Array(bands))
     }
+
+    // MARK: - Metadata (firmware)
+    //
+    // NEEDS-HARDWARE: only the V1 firmware REQUEST (0x04 0x02) is asserted upstream; the reply
+    // decoder and serial/model queries are stubs. We decode an ASCII firmware string from a
+    // response prefixed 0x05; serial/model are deferred until a device confirms their frames.
+
+    public static func encodeFirmwareQuery(version: SonyProtocol) -> [UInt8] { [0x04, 0x02] }
+
+    public static func decodeFirmware(_ payload: [UInt8], version: SonyProtocol) -> String? {
+        guard payload.count >= 3, payload[0] == 0x05 else { return nil }
+        let ascii = Array(payload[2...])
+        return String(bytes: ascii, encoding: .utf8)
+    }
 }
