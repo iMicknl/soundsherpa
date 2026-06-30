@@ -160,7 +160,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     private func finishStartMonitoring() {
         setupBluetoothNotifications()
         setupSleepWakeNotifications()
-        checkForBoseDevices()
+        checkForSupportedDevices()
 
         // Periodic rescan/reconnect every 30s (matches the original AppDelegate). The timer
         // is scheduled on the main run loop, so the closure always fires on the main thread;
@@ -168,7 +168,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         // that could reorder relative to the synchronous teardown in shutDown().
         scanTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.checkForBoseDevices()
+                self?.checkForSupportedDevices()
             }
         }
 
@@ -177,7 +177,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if self.isConnected {
-                    self.detectNoiseCancellationStatusAsync()
+                    self.detectDeviceStateAsync()
                 }
             }
         }
@@ -259,13 +259,13 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         print("System did wake — re-scanning for Bose device")
         // Cached connection state may be stale after sleep; force a fresh fetch.
         lastDataFetchTime = nil
-        checkForBoseDevices()
+        checkForSupportedDevices()
     }
 
     @objc private func deviceConnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
         // Just note that a Bose device connected and arm its disconnect notification; don't
         // interfere with normal operation.
-        if isBoseDevice(device) {
+        if isSupportedDevice(device) {
             print("Bose device connected: \(device.name ?? "Unknown")")
             currentBoseDevice = device
             setupDeviceSpecificNotifications(for: device)
@@ -273,13 +273,13 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             // surface in the UI immediately, not on the next 30s scan tick. The connection may
             // be stale relative to our cache, so force a fresh fetch, then re-scan now.
             lastDataFetchTime = nil
-            checkForBoseDevices()
+            checkForSupportedDevices()
         }
     }
 
     @objc private func deviceDisconnected(_ notification: IOBluetoothUserNotification, device: IOBluetoothDevice) {
         // Only act on disconnection of our current device.
-        if isBoseDevice(device) && currentBoseDevice?.addressString == device.addressString {
+        if isSupportedDevice(device) && currentBoseDevice?.addressString == device.addressString {
             print("Bose device disconnected: \(device.name ?? "Unknown")")
             currentBoseDevice = nil
             disconnectionNotification = nil // Clear the notification
@@ -295,9 +295,9 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         }
     }
 
-    private func isBoseDevice(_ device: IOBluetoothDevice) -> Bool {
+    nonisolated private func isSupportedDevice(_ device: IOBluetoothDevice) -> Bool {
         guard let name = device.name else { return false }
-        return name.lowercased().contains("bose")
+        return deviceRegistry.plugin(forDeviceNamed: name) != nil
     }
 
     // MARK: - Intents
@@ -423,55 +423,41 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     // MARK: - Device Discovery
 
-    func checkForBoseDevices() {
-        print("Checking for Bose devices...")
+    func checkForSupportedDevices() {
+        print("Checking for supported devices...")
 
-        // Fast path: Check IOBluetooth paired devices first (much faster than system_profiler)
         if let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] {
             for device in pairedDevices {
-                if let name = device.name, name.lowercased().contains("bose"), device.isConnected() {
-                    print("Fast path: Found connected Bose device: \(name)")
+                guard let name = device.name,
+                      let plugin = deviceRegistry.plugin(forDeviceNamed: name),
+                      device.isConnected() else { continue }
 
-                    self.deviceAddress = device.addressString
+                print("Found connected supported device: \(name) [\(plugin.identifier)]")
+                self.deviceAddress = device.addressString
+                self.activePlugin = plugin
 
-                    // Resolve which brand plugin speaks this device's protocol, by name. All
-                    // command I/O below routes through it, so a new brand is a new plugin.
-                    self.activePlugin = self.deviceRegistry.plugin(forDeviceNamed: name)
-
-                    // Read host-side Bluetooth facts (VID/PID, services) that the Bose
-                    // control protocol can't provide, straight from the SDP records.
-                    let sdpMeta = self.sdpMetadata(for: device)
-                    if !sdpMeta.isEmpty, let address = device.addressString {
-                        self.metadataStore.put(sdpMeta, for: address)
-                    }
-
-                    self.deviceName = name
-                    // isConnected reflects OS-level connection: the device is paired and
-                    // connected, so the controls are shown immediately. The RFCOMM control
-                    // channel is a separate, lazier concern — it can fail or drop transiently,
-                    // and `ensureConnected` (re)opens it on demand when a command is sent. We
-                    // deliberately do NOT gate the UI on the channel: doing so hid the entire
-                    // tile whenever a channel open failed, even though the device was usable.
-                    self.isConnected = true
-                    // Show last-known-good static metadata instantly, before RFCOMM I/O.
-                    if let address = device.addressString {
-                        self.applyCachedMetadata(for: address)
-                    }
-
-                    // Start fetching detailed data via RFCOMM
-                    self.detectNoiseCancellationStatusAsync()
-                    return
+                let sdpMeta = self.sdpMetadata(for: device)
+                if !sdpMeta.isEmpty, let address = device.addressString {
+                    self.metadataStore.put(sdpMeta, for: address)
                 }
+
+                self.deviceName = name
+                self.isConnected = true
+                if let address = device.addressString {
+                    self.applyCachedMetadata(for: address)
+                }
+
+                self.detectDeviceStateAsync()
+                return
             }
         }
 
-        // No connected Bose device found.
         self.isConnected = false
         self.deviceName = nil
         self.batteryLevel = nil
     }
 
-    private func detectNoiseCancellationStatusAsync() {
+    private func detectDeviceStateAsync() {
         guard let deviceAddr = deviceAddress else {
             print("No device address available for NC detection")
             return
@@ -487,7 +473,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
             print(">>> Starting connection to device: \(deviceAddr)")
 
-            guard self.connectToBoseDeviceSync(address: deviceAddr) else {
+            guard self.connectSupportedDeviceSync(address: deviceAddr) else {
                 print(">>> Connection failed — control channel not open; will retry on next command/scan")
                 // Do not flip isConnected: the device is still connected at the OS level and
                 // the UI should stay visible. ensureConnected retries the channel when the
@@ -505,7 +491,30 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         }
     }
 
-    nonisolated private func connectToBoseDeviceSync(address: String) -> Bool {
+    /// Find the first SDP service record matching any of the descriptor's matchers, in order.
+    nonisolated private func serviceRecord(matching matchers: [ServiceMatcher],
+                                           in records: [IOBluetoothSDPServiceRecord]) -> IOBluetoothSDPServiceRecord? {
+        for matcher in matchers {
+            switch matcher {
+            case .serviceName(let wanted):
+                if let r = records.first(where: { $0.getServiceName() == wanted }) { return r }
+            case .uuid(let uuidString):
+                // For Bose, we use the hex short-form UUID (e.g., "0x1101" for SPP).
+                // If it starts with "0x", parse it as a 16-bit UUID and match directly.
+                if uuidString.hasPrefix("0x"), let v = UInt16(uuidString.dropFirst(2), radix: 16) {
+                    for record in records {
+                        if record.matchesUUID16(v) { return record }
+                    }
+                }
+                // For full UUID strings, we'd need IOBluetoothSDPUUID, but Bose only uses
+                // short-form UUIDs, so we skip this path for now. A future plugin needing
+                // full UUIDs can extend this.
+            }
+        }
+        return nil
+    }
+
+    nonisolated private func connectSupportedDeviceSync(address: String) -> Bool {
         guard let pairedDevices = IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] else {
             print("No paired devices found")
             return false
@@ -524,10 +533,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
                     return true
                 }
             }
-            if let name = device.name, name.contains("Bose") {
-                return true
-            }
-            return false
+            return isSupportedDevice(device)
         }) else {
             print("Could not find Bose device in paired devices")
             return false
@@ -569,18 +575,19 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             return false
         }
 
-        guard let sppService = services.first(where: { $0.getServiceName() == "SPP Dev" }) else {
-            print("Could not find SPP Dev service")
-            if let anySerialService = services.first(where: {
-                let name = $0.getServiceName() ?? ""
-                return name.lowercased().contains("spp") || name.lowercased().contains("serial")
-            }) {
-                return connectToService(device: device, service: anySerialService)
-            }
-            return false
+        let matchers = activePlugin?.discoveryDescriptor.serviceMatchers
+            ?? [.serviceName("SPP Dev"), .uuid("0x1101")]
+        if let service = serviceRecord(matching: matchers, in: services) {
+            return connectToService(device: device, service: service)
         }
-
-        return connectToService(device: device, service: sppService)
+        // Last-resort fallback preserved from the old code: any serial/SPP-named service.
+        if let anySerialService = services.first(where: {
+            let n = $0.getServiceName() ?? ""
+            return n.lowercased().contains("spp") || n.lowercased().contains("serial")
+        }) {
+            return connectToService(device: device, service: anySerialService)
+        }
+        return false
     }
 
     /// Extracts the host-side Bluetooth facts the Bose control protocol can't provide —
@@ -687,7 +694,9 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             channelOpenSemaphore = nil
         }
 
-        let channelIdsToTry: [BluetoothRFCOMMChannelID] = [8, 9, 1, 2, 3]
+        let channelIdsToTry: [BluetoothRFCOMMChannelID] =
+            (activePlugin?.discoveryDescriptor.channelHints ?? [8, 9, 1, 2, 3])
+            .map { BluetoothRFCOMMChannelID($0) }
         for tryChannelId in channelIdsToTry {
             if tryChannelId == channelId { continue }
             channel = nil
@@ -1119,7 +1128,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
         return await withCheckedContinuation { continuation in
             connectionQueue.async { [weak self] in
-                let result = self?.connectToBoseDeviceSync(address: deviceAddr) ?? false
+                let result = self?.connectSupportedDeviceSync(address: deviceAddr) ?? false
                 continuation.resume(returning: result)
             }
         }
