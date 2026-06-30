@@ -5,7 +5,7 @@ struct TileFooter: View {
 
     var body: some View {
         VStack(spacing: 1) {
-            MenuRow(title: "Advanced Settings…") {
+            MenuRow(title: "Settings…") {
                 openSettings()
                 // LSUIElement (.accessory) apps never become active on their own, so the
                 // Settings window would open behind other apps. Activate to pull it forward.
