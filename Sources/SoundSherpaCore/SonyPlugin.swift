@@ -81,8 +81,23 @@ public struct SonyPlugin: DevicePlugin {
         return metadata
     }
 
-    // Filled in Tasks 10–11.
-    public func readState(over channel: DeviceChannel) async -> DeviceState { DeviceState() }
+    public func readState(over channel: DeviceChannel) async -> DeviceState {
+        var state = DeviceState()
+        guard let version = await negotiateVersion(over: channel) else { return state }
+
+        let batteryReply = await sendFramed(SonyCodec.encodeBatteryQuery(version: version), over: channel)
+        state.battery = SonyCodec.decodeBattery(batteryReply, version: version)
+
+        let ancReply = await sendFramed(SonyCodec.encodeAmbientStatusQuery(version: version), over: channel)
+        state.anc = SonyCodec.decodeANC(ancReply, version: version)
+
+        let eqReply = await sendFramed(SonyCodec.encodeEQStatusQuery(version: version), over: channel)
+        state.equalizer = SonyCodec.decodeEQ(eqReply, version: version)
+
+        return state
+    }
+
+    // Filled in Task 11.
     public func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool { false }
 }
 

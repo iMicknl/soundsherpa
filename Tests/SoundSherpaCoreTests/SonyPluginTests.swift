@@ -70,4 +70,47 @@ extension SonyPluginTests {
         let result = await SonyPlugin().readBatteryLevel(over: channel)
         XCTAssertNil(result)
     }
+
+    func testReadStateAssemblesBatteryANCAndEQ() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = SonyPlugin()
+
+        async let state = plugin.readState(over: channel)
+        // 1) negotiate -> V2
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest(frameV2([0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00]))
+        // 2) battery -> 90 (VERIFY ON HARDWARE reply layout)
+        try await transport.awaitWrite(count: 2)
+        await channel.ingest(frameV2([0x23, 0x00, 0x5A, 0x01]))
+        // 3) ambient status -> ambient, level 15, focus off (VERIFY ON HARDWARE reply layout)
+        try await transport.awaitWrite(count: 3)
+        await channel.ingest(frameV2([0x67, 0x17, 0x01, 0x01, 0x01, 0x00, 0x0F]))
+        // 4) EQ status -> OFF preset, flat bands (asserted vector)
+        try await transport.awaitWrite(count: 4)
+        await channel.ingest(frameV2([0x59, 0x00, 0x00, 0x06, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A]))
+
+        let s = await state
+        XCTAssertEqual(s.battery, 90)
+        XCTAssertEqual(s.anc?.mode, .ambient)
+        XCTAssertEqual(s.anc?.ambientLevel, 15)
+        XCTAssertEqual(s.anc?.focusOnVoice, false)
+        XCTAssertEqual(s.equalizer?.presetId, 0x00)
+        // Bose-only fields stay nil.
+        XCTAssertNil(s.selfVoice)
+        XCTAssertNil(s.noiseCancellationLevel)
+    }
+
+    func testReadStateEmptyWhenNegotiationFails() async {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let s = await SonyPlugin().readState(over: channel)
+        XCTAssertNil(s.battery)
+        XCTAssertNil(s.anc)
+        XCTAssertNil(s.equalizer)
+    }
+
+    private func frameV2(_ payload: [UInt8]) -> [UInt8] {
+        SonyFraming.encode(type: .command1, seq: 0, payload: payload)
+    }
 }
