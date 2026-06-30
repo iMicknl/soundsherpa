@@ -36,3 +36,87 @@ final class SonyCodecTests: XCTestCase {
         XCTAssertNil(SonyCodec.decodeBattery([0x11], version: .v1))
     }
 }
+
+extension SonyCodecTests {
+
+    // MARK: - ANC/ambient V1 (asserted, SonyProtocolImplV1Test.setAmbientSoundControl)
+    // V1 layout: [0x68,0x02,<mode 0x00 off/0x11 on>,0x00,<nc>,0x01,<focus>,<level>]
+    func testEncodeANCV1Off() {
+        let s = ANCState(mode: .off)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v1),
+                       [0x68, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00])
+    }
+
+    func testEncodeANCV1AmbientLevel10() {
+        let s = ANCState(mode: .ambient, ambientLevel: 10, focusOnVoice: false)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v1),
+                       [0x68, 0x02, 0x11, 0x00, 0x00, 0x01, 0x00, 0x0A])
+    }
+
+    func testEncodeANCV1AmbientFocusOnVoiceLevel15() {
+        let s = ANCState(mode: .ambient, ambientLevel: 15, focusOnVoice: true)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v1),
+                       [0x68, 0x02, 0x11, 0x00, 0x00, 0x01, 0x01, 0x0F])
+    }
+
+    func testEncodeANCV1NoiseCancelling() {
+        let s = ANCState(mode: .noiseCancelling)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v1),
+                       [0x68, 0x02, 0x11, 0x00, 0x01, 0x01, 0x00, 0x00])
+    }
+
+    // MARK: - ANC/ambient V2 (asserted bare payloads, SonyProtocolImplV2Test)
+    // V2 layout: [0x68,0x17,0x01,<off 0x00/on 0x01>,<ambientFlag>,<focus>,<level>]
+    func testEncodeANCV2AmbientLevel20() {
+        let s = ANCState(mode: .ambient, ambientLevel: 20, focusOnVoice: false)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v2),
+                       [0x68, 0x17, 0x01, 0x01, 0x01, 0x00, 0x14])
+    }
+
+    func testEncodeANCV2AmbientFocusOnVoice() {
+        let s = ANCState(mode: .ambient, ambientLevel: 20, focusOnVoice: true)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v2),
+                       [0x68, 0x17, 0x01, 0x01, 0x01, 0x01, 0x14])
+    }
+
+    func testEncodeANCV2NoiseCancellingLevel20() {
+        let s = ANCState(mode: .noiseCancelling, ambientLevel: 20)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v2),
+                       [0x68, 0x17, 0x01, 0x01, 0x00, 0x00, 0x14])
+    }
+
+    func testEncodeANCV2Off() {
+        let s = ANCState(mode: .off, ambientLevel: 20)
+        XCTAssertEqual(SonyCodec.encodeANC(s, version: .v2),
+                       [0x68, 0x17, 0x01, 0x00, 0x00, 0x00, 0x14])
+    }
+
+    // Ambient level must be clamped to 0–20 regardless of input.
+    func testEncodeANCClampsAmbientLevel() {
+        let hi = ANCState(mode: .ambient, ambientLevel: 99, focusOnVoice: false)
+        XCTAssertEqual(SonyCodec.encodeANC(hi, version: .v2).last, 0x14)  // 20
+        let lo = ANCState(mode: .ambient, ambientLevel: -5, focusOnVoice: false)
+        XCTAssertEqual(SonyCodec.encodeANC(lo, version: .v2).last, 0x00)
+    }
+
+    // MARK: - Ambient status query (asserted: 0x66 0x02 both dialects)
+    func testAmbientStatusQuery() {
+        XCTAssertEqual(SonyCodec.encodeAmbientStatusQuery(version: .v1), [0x66, 0x02])
+        XCTAssertEqual(SonyCodec.encodeAmbientStatusQuery(version: .v2), [0x66, 0x02])
+    }
+
+    // MARK: - ANC reply decode
+    // NEEDS-HARDWARE: ambient reply is a // TODO stub upstream. Fixture mirrors the V2 set
+    // layout under response type 0x67 (request 0x66 + 1). VERIFY ON HARDWARE.
+    func testDecodeANCV2Ambient() {
+        let decoded = SonyCodec.decodeANC([0x67, 0x17, 0x01, 0x01, 0x01, 0x00, 0x0F], version: .v2)
+        XCTAssertEqual(decoded?.mode, .ambient)
+        XCTAssertEqual(decoded?.ambientLevel, 15)
+        XCTAssertEqual(decoded?.focusOnVoice, false)
+    }
+
+    func testDecodeANCRejectsGarbage() {
+        XCTAssertNil(SonyCodec.decodeANC([0x00], version: .v2))
+        XCTAssertNil(SonyCodec.decodeANC([], version: .v1))
+    }
+}

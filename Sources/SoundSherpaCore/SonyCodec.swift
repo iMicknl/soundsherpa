@@ -29,4 +29,57 @@ public enum SonyCodec {
         guard payload.count >= 3, payload[0] == expectedType else { return nil }
         return Int(payload[2])
     }
+
+    // MARK: - ANC / ambient (command 0x68)
+
+    private static func clampLevel(_ level: Int?) -> UInt8 {
+        UInt8(min(20, max(0, level ?? 0)))
+    }
+
+    /// Encode a sound-control change. V1 (XM4) and V2 (XM5) use different payload layouts for
+    /// the same 0x68 command — see the per-dialect builders. The "no wind-noise capability"
+    /// V1 form is used (byte[3]=0x00); wind-noise reduction is out of scope for v1.
+    public static func encodeANC(_ state: ANCState, version: SonyProtocol) -> [UInt8] {
+        let level = clampLevel(state.ambientLevel)
+        let focus: UInt8 = (state.focusOnVoice == true) ? 0x01 : 0x00
+        switch version {
+        case .v1:
+            // [0x68,0x02,<modeOn>,0x00,<nc>,0x01,<focus>,<level>]
+            let modeOn: UInt8 = (state.mode == .off) ? 0x00 : 0x11
+            let nc: UInt8 = (state.mode == .noiseCancelling) ? 0x01 : 0x00
+            return [0x68, 0x02, modeOn, 0x00, nc, 0x01, focus, level]
+        case .v2:
+            // [0x68,0x17,0x01,<off 0x00/on 0x01>,<ambientFlag>,<focus>,<level>]
+            let on: UInt8 = (state.mode == .off) ? 0x00 : 0x01
+            let ambientFlag: UInt8 = (state.mode == .ambient) ? 0x01 : 0x00
+            return [0x68, 0x17, 0x01, on, ambientFlag, focus, level]
+        }
+    }
+
+    public static func encodeAmbientStatusQuery(version: SonyProtocol) -> [UInt8] {
+        [0x66, 0x02]
+    }
+
+    /// Decode an ambient/ANC status reply. VERIFY ON HARDWARE: built from the V2 set layout
+    /// under response type 0x67; the upstream reply decoder is a stub.
+    public static func decodeANC(_ payload: [UInt8], version: SonyProtocol) -> ANCState? {
+        switch version {
+        case .v2:
+            guard payload.count >= 7, payload[0] == 0x67, payload[1] == 0x17 else { return nil }
+            let on = payload[3] != 0x00
+            let ambient = payload[4] != 0x00
+            let mode: ANCState.Mode = !on ? .off : (ambient ? .ambient : .noiseCancelling)
+            return ANCState(mode: mode,
+                            ambientLevel: Int(payload[6]),
+                            focusOnVoice: payload[5] != 0x00)
+        case .v1:
+            guard payload.count >= 8, payload[0] == 0x67, payload[1] == 0x02 else { return nil }
+            let on = payload[2] != 0x00
+            let nc = payload[4] != 0x00
+            let mode: ANCState.Mode = !on ? .off : (nc ? .noiseCancelling : .ambient)
+            return ANCState(mode: mode,
+                            ambientLevel: Int(payload[7]),
+                            focusOnVoice: payload[6] != 0x00)
+        }
+    }
 }
