@@ -134,8 +134,7 @@ struct SettingsView: View {
         .padding()
     }
 
-    /// Device name as the subject of the tab (not a settings row), with battery
-    /// when known. Brand is derived from the existing deviceId prefix when present.
+    /// Device name as the subject of the tab (not a settings row).
     private var deviceHeader: some View {
         HStack(spacing: 10) {
             Image(systemName: "headphones")
