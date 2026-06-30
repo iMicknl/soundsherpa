@@ -34,6 +34,18 @@ final class DeviceRegistryTests: XCTestCase {
     }
 }
 
+extension DeviceRegistryTests {
+    func testStandardRegistryResolvesSony() {
+        let registry = DeviceRegistry.standard
+        XCTAssertEqual(registry.plugin(forDeviceNamed: "WH-1000XM5")?.identifier, "Sony")
+        XCTAssertEqual(registry.plugin(forDeviceNamed: "Sony WH-1000XM4")?.identifier, "Sony")
+    }
+
+    func testStandardRegistryStillResolvesBose() {
+        XCTAssertEqual(DeviceRegistry.standard.plugin(forDeviceNamed: "Bose QC35 II")?.identifier, "Bose")
+    }
+}
+
 /// A minimal DevicePlugin used to test registry resolution without any real protocol I/O.
 private struct StubPlugin: DevicePlugin {
     let identifier: String

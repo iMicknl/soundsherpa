@@ -16,7 +16,7 @@ public struct DeviceRegistry: Sendable {
     /// The default set of plugins the app ships with. Add a brand here (and nowhere else) to
     /// support it end-to-end.
     public static var standard: DeviceRegistry {
-        DeviceRegistry(plugins: [BosePlugin()])
+        DeviceRegistry(plugins: [BosePlugin(), SonyPlugin()])
     }
 
     /// The first registered plugin that claims `name`, or nil if no brand handles it.
