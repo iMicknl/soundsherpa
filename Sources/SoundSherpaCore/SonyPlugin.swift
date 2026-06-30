@@ -97,8 +97,27 @@ public struct SonyPlugin: DevicePlugin {
         return state
     }
 
-    // Filled in Task 11.
-    public func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool { false }
+    public func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool {
+        let payload: [UInt8]
+        switch change {
+        case .anc(let state):
+            guard let version = await negotiateVersion(over: channel) else { return false }
+            payload = SonyCodec.encodeANC(state, version: version)
+        case .equalizer(let eq):
+            guard let version = await negotiateVersion(over: channel) else { return false }
+            payload = SonyCodec.encodeEQ(eq, version: version)
+        case .noiseCancellation, .selfVoice, .autoOff, .buttonAction, .promptLanguage, .voicePrompts:
+            // Bose-only changes; Sony does not handle them.
+            return false
+        }
+        // Send the framed command and check if we got *any* reply frame (even with empty payload).
+        // Unlike sendFramed which returns the decoded payload, we need the raw bytes here to
+        // distinguish "got an ACK with empty payload" from "timeout/no reply".
+        let seq = versionBox.seq
+        let frame = SonyFraming.encode(type: .command1, seq: seq, payload: payload)
+        let reply = (try? await channel.send(frame, matcher: .prefix([0x3E]), timeout: 0.5)) ?? []
+        return !reply.isEmpty   // any framed reply within the window is treated as an ACK
+    }
 }
 
 /// Reference box for the negotiated dialect + sequence byte. See the SAFETY note on

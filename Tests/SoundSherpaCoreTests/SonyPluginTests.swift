@@ -114,3 +114,51 @@ extension SonyPluginTests {
         SonyFraming.encode(type: .command1, seq: 0, payload: payload)
     }
 }
+
+extension SonyPluginTests {
+    func testApplyANCWritesFramedV2PayloadAndAcks() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = SonyPlugin()
+
+        let applyTask = Task {
+            await plugin.apply(.anc(ANCState(mode: .ambient, ambientLevel: 20, focusOnVoice: false)),
+                              over: channel)
+        }
+        // negotiate -> V2
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest(SonyFraming.encode(type: .command1, seq: 0,
+                             payload: [0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00]))
+        // ANC write -> device ACKs (any framed reply is an ACK for our purposes)
+        try await transport.awaitWrite(count: 2)
+        await channel.ingest(SonyFraming.encode(type: .ack, seq: 0, payload: []))
+
+        let result = await applyTask.value
+        XCTAssertTrue(result, "apply should return true on ACK")
+        let writes = await transport.writes
+        // The 2nd write is the framed V2 ambient payload [0x68,0x17,0x01,0x01,0x01,0x00,0x14].
+        let expectedPayload: [UInt8] = [0x68, 0x17, 0x01, 0x01, 0x01, 0x00, 0x14]
+        XCTAssertEqual(SonyFraming.decode(writes[1])?.payload, expectedPayload, "Second write should be framed ANC command")
+    }
+
+    func testApplyRejectsBoseOnlyChanges() async {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = SonyPlugin()
+        // No negotiation needed; unsupported changes short-circuit to false without I/O.
+        let r1 = await plugin.apply(.selfVoice(.medium), over: channel)
+        let r2 = await plugin.apply(.autoOff(.twenty), over: channel)
+        XCTAssertFalse(r1)
+        XCTAssertFalse(r2)
+        let writes = await transport.writes
+        XCTAssertTrue(writes.isEmpty, "Bose-only changes should not trigger any writes")
+    }
+
+    func testApplyReturnsFalseOnTimeout() async {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        // Negotiation itself times out -> false.
+        let r = await SonyPlugin().apply(.equalizer(EqualizerState(presetId: 0x00)), over: channel)
+        XCTAssertFalse(r, "apply should return false on negotiation timeout")
+    }
+}
