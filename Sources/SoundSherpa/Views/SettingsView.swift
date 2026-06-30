@@ -51,50 +51,89 @@ struct SettingsView: View {
     }
 
     private var deviceTab: some View {
-        Form {
-            // Which device these controls apply to — surfaced because a user may
-            // have several headphones paired and switch between them.
-            Section {
-                LabeledContent("Device", value: controller.deviceName ?? "Not connected")
-            }
+        Group {
+            if controller.isConnected {
+                VStack(spacing: 0) {
+                    deviceHeader
+                        .padding(.horizontal)
+                        .padding(.top)
+                    Form {
+                        Section("Controls") {
+                            Picker("Auto-Off", selection: Binding(
+                                get: { controller.autoOff ?? .never },
+                                set: { controller.setAutoOff($0) })) {
+                                ForEach([AutoOff.never, .five, .twenty, .forty, .sixty, .oneEighty], id: \.rawValue) {
+                                    Text($0.displayName).tag($0)
+                                }
+                            }
+                            Picker("Button Action", selection: Binding(
+                                get: { controller.buttonAction ?? .noiseCancellation },
+                                set: { controller.setButtonAction($0) })) {
+                                Text("Alexa").tag(ButtonAction.alexa)
+                                Text("Noise Cancellation").tag(ButtonAction.noiseCancellation)
+                            }
+                            Picker("Language", selection: Binding(
+                                get: { controller.language ?? .english },
+                                set: { controller.setLanguage($0) })) {
+                                ForEach(languageChoices, id: \.rawValue) { Text($0.displayName).tag($0) }
+                            }
+                            Toggle("Voice Prompts", isOn: Binding(
+                                get: { controller.voicePromptsEnabled ?? false },
+                                set: { controller.setVoicePrompts($0) }))
+                        }
 
-            Section("Controls") {
-                Picker("Auto-Off", selection: Binding(
-                    get: { controller.autoOff ?? .never },
-                    set: { controller.setAutoOff($0) })) {
-                    ForEach([AutoOff.never, .five, .twenty, .forty, .sixty, .oneEighty], id: \.rawValue) {
-                        Text($0.displayName).tag($0)
+                        // Read-only device identity, moved here from About (nil → row hidden).
+                        if hasDeviceInfo {
+                            Section("Information") {
+                                if let v = controller.firmware { LabeledContent("Firmware", value: v) }
+                                if let v = controller.serial { LabeledContent("Serial Number", value: v) }
+                                if let v = controller.deviceId { LabeledContent("Device ID", value: v) }
+                                if let v = controller.services, !v.isEmpty {
+                                    LabeledContent("Services", value: v.joined(separator: ", "))
+                                }
+                            }
+                        }
                     }
+                    .formStyle(.grouped)
                 }
-                Picker("Button Action", selection: Binding(
-                    get: { controller.buttonAction ?? .noiseCancellation },
-                    set: { controller.setButtonAction($0) })) {
-                    Text("Alexa").tag(ButtonAction.alexa)
-                    Text("Noise Cancellation").tag(ButtonAction.noiseCancellation)
-                }
-                Picker("Language", selection: Binding(
-                    get: { controller.language ?? .english },
-                    set: { controller.setLanguage($0) })) {
-                    ForEach(languageChoices, id: \.rawValue) { Text($0.displayName).tag($0) }
-                }
-                Toggle("Voice Prompts", isOn: Binding(
-                    get: { controller.voicePromptsEnabled ?? false },
-                    set: { controller.setVoicePrompts($0) }))
-            }
-
-            // Read-only device identity, moved here from About (nil → row hidden).
-            if hasDeviceInfo {
-                Section("Information") {
-                    if let v = controller.firmware { LabeledContent("Firmware", value: v) }
-                    if let v = controller.serial { LabeledContent("Serial Number", value: v) }
-                    if let v = controller.deviceId { LabeledContent("Device ID", value: v) }
-                    if let v = controller.services, !v.isEmpty {
-                        LabeledContent("Services", value: v.joined(separator: ", "))
-                    }
-                }
+            } else {
+                deviceDisconnected
             }
         }
-        .formStyle(.grouped)
+    }
+
+    private var deviceDisconnected: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "headphones")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text("No device connected")
+                .font(.headline)
+            Text("Connect your headphones to manage their settings here.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+
+    /// Device name as the subject of the tab (not a settings row), with battery
+    /// when known. Brand is derived from the existing deviceId prefix when present.
+    private var deviceHeader: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "headphones")
+                .font(.title2)
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(controller.deviceName ?? "Device")
+                    .font(.headline)
+                Text("Connected")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
     }
 
     private var hasDeviceInfo: Bool {
