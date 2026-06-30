@@ -14,22 +14,26 @@ struct ContentTile: View {
             if controller.isConnected {
                 Divider()
 
-                SegmentedSection(
-                    title: "Noise Cancellation",
-                    options: [(.off, "Off", "speaker.wave.1"),
-                              (.low, "Low", "speaker.wave.2"),
-                              (.high, "High", "speaker.wave.3")],
-                    selection: controller.ncLevel,
-                    onSelect: { controller.setNoiseCancellation($0) })
+                if controller.supportedFeatures.contains(.noiseCancellation) {
+                    SegmentedSection(
+                        title: "Noise Cancellation",
+                        options: [(.off, "Off", "speaker.wave.1"),
+                                  (.low, "Low", "speaker.wave.2"),
+                                  (.high, "High", "speaker.wave.3")],
+                        selection: controller.ncLevel,
+                        onSelect: { controller.setNoiseCancellation($0) })
+                }
 
-                SegmentedSection(
-                    title: "Self Voice",
-                    options: [(.off, "Off", "person"),
-                              (.low, "Low", "person.wave.2"),
-                              (.medium, "Medium", "person.wave.2.fill"),
-                              (.high, "High", "person.spatialaudio.stereo.fill")],
-                    selection: controller.selfVoiceLevel,
-                    onSelect: { controller.setSelfVoice($0) })
+                if controller.supportedFeatures.contains(.selfVoice) {
+                    SegmentedSection(
+                        title: "Self Voice",
+                        options: [(.off, "Off", "person"),
+                                  (.low, "Low", "person.wave.2"),
+                                  (.medium, "Medium", "person.wave.2.fill"),
+                                  (.high, "High", "person.spatialaudio.stereo.fill")],
+                        selection: controller.selfVoiceLevel,
+                        onSelect: { controller.setSelfVoice($0) })
+                }
 
                 // Native-style disclosure: a full-width row with a trailing chevron that
                 // rotates when expanded, revealing the advanced controls inline.

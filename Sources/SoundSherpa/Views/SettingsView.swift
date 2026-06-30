@@ -60,33 +60,39 @@ struct SettingsView: View {
                         .padding(.top)
                     Form {
                         Section("Controls") {
-                            Picker("Auto-Off", selection: Binding(
-                                get: { controller.autoOff ?? .never },
-                                set: { controller.setAutoOff($0) })) {
-                                ForEach([AutoOff.never, .five, .twenty, .forty, .sixty, .oneEighty], id: \.rawValue) {
-                                    Text($0.displayName).tag($0)
+                            if controller.supportedFeatures.contains(.autoOff) {
+                                Picker("Auto-Off", selection: Binding(
+                                    get: { controller.autoOff ?? .never },
+                                    set: { controller.setAutoOff($0) })) {
+                                    ForEach([AutoOff.never, .five, .twenty, .forty, .sixty, .oneEighty], id: \.rawValue) {
+                                        Text($0.displayName).tag($0)
+                                    }
                                 }
+                                Text("Turn the headphones off after a period of inactivity to save battery.")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
-                            Text("Turn the headphones off after a period of inactivity to save battery.")
-                                .font(.caption).foregroundStyle(.secondary)
 
-                            Picker("Button Action", selection: Binding(
-                                get: { controller.buttonAction ?? .noiseCancellation },
-                                set: { controller.setButtonAction($0) })) {
-                                Text("Alexa").tag(ButtonAction.alexa)
-                                Text("Noise Cancellation").tag(ButtonAction.noiseCancellation)
+                            if controller.supportedFeatures.contains(.buttonAction) {
+                                Picker("Button Action", selection: Binding(
+                                    get: { controller.buttonAction ?? .noiseCancellation },
+                                    set: { controller.setButtonAction($0) })) {
+                                    Text("Alexa").tag(ButtonAction.alexa)
+                                    Text("Noise Cancellation").tag(ButtonAction.noiseCancellation)
+                                }
+                                Text("Choose what a press of the headphones' action button does.")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
-                            Text("Choose what a press of the headphones' action button does.")
-                                .font(.caption).foregroundStyle(.secondary)
 
-                            Picker("Language", selection: Binding(
-                                get: { controller.language ?? .english },
-                                set: { controller.setLanguage($0) })) {
-                                ForEach(languageChoices, id: \.rawValue) { Text($0.displayName).tag($0) }
+                            if controller.supportedFeatures.contains(.promptLanguage) {
+                                Picker("Language", selection: Binding(
+                                    get: { controller.language ?? .english },
+                                    set: { controller.setLanguage($0) })) {
+                                    ForEach(languageChoices, id: \.rawValue) { Text($0.displayName).tag($0) }
+                                }
+                                Toggle("Voice Prompts", isOn: Binding(
+                                    get: { controller.voicePromptsEnabled ?? false },
+                                    set: { controller.setVoicePrompts($0) }))
                             }
-                            Toggle("Voice Prompts", isOn: Binding(
-                                get: { controller.voicePromptsEnabled ?? false },
-                                set: { controller.setVoicePrompts($0) }))
                         }
 
                         Section("About this device") {
