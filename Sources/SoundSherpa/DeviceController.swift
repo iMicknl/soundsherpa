@@ -106,10 +106,6 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     @ObservationIgnored nonisolated(unsafe) private var connectionNotification: IOBluetoothUserNotification?
     @ObservationIgnored nonisolated(unsafe) private var disconnectionNotification: IOBluetoothUserNotification?
 
-    // Tracks the language byte (incl. the voice-prompt high bit) so voice-prompt toggles can
-    // preserve the selected language. Carried over from AppDelegate.
-    @ObservationIgnored nonisolated(unsafe) private var currentLanguageValue: UInt8 = 0x21
-
     // Throttle the full fetch burst: skip it if we fetched within the last 30s. Pure timing
     // state (Date only, no UI dependency) carried over verbatim from AppDelegate. Touched only
     // from the @MainActor `fetchAllDeviceInfo`, so plain stored properties suffice.
@@ -783,17 +779,6 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         guard let channel = deviceChannel else { return [] }
         do {
             return try await channel.send(command, matcher: .prefix(prefix), timeout: timeout)
-        } catch {
-            return []
-        }
-    }
-
-    /// Send a command and collect every reply sharing `prefix` until `window` elapses. Used
-    /// for the status query, which provokes several distinct broadcast messages.
-    nonisolated private func collect(_ command: [UInt8], prefix: [UInt8], window: TimeInterval) async -> [UInt8] {
-        guard let channel = deviceChannel else { return [] }
-        do {
-            return try await channel.send(command, matcher: .collecting(prefix: prefix), timeout: window)
         } catch {
             return []
         }
