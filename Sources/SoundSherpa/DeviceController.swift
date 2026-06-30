@@ -57,6 +57,9 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     var deviceId: String?
     var services: [String]?
 
+    // Which controls the active device exposes; drives UI gating. Empty when disconnected.
+    var supportedFeatures: Set<DeviceFeature> = []
+
     // MARK: - Nonisolated channel / connection state
     //
     // Touched from `connectionQueue` and the IOBluetooth delegate callbacks, never from the
@@ -292,6 +295,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             self.isConnected = false
             self.deviceName = nil
             self.batteryLevel = nil
+            self.supportedFeatures = []
         }
     }
 
@@ -302,19 +306,30 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     // MARK: - Intents
 
+    /// Apply a typed change through the active plugin over the serialized channel. Returns
+    /// whether it was acknowledged. Mirrors the old per-intent send, but brand-agnostic.
+    private func applyChange(_ change: DeviceChange) async -> Bool {
+        guard await ensureConnected(), let plugin = activePlugin, let channel = deviceChannel else {
+            return false
+        }
+        return await plugin.apply(change, over: channel)
+    }
+
     func setNoiseCancellation(_ level: NoiseCancellationLevel) {
         Task { [weak self] in
-            guard let self, await self.ensureConnected() else { return }
-            _ = await self.send([0x01, 0x06, 0x02, 0x01, level.byte], expecting: [0x01, 0x06])
-            self.ncLevel = level
+            guard let self else { return }
+            if await self.applyChange(.noiseCancellation(level)) {
+                self.ncLevel = level
+            }
         }
     }
 
     func setSelfVoice(_ level: SelfVoiceLevel) {
         Task { [weak self] in
-            guard let self, await self.ensureConnected() else { return }
-            _ = await self.send([0x01, 0x0b, 0x02, 0x02, 0x01, level.rawValue, 0x38], expecting: [0x01, 0x0b])
-            self.selfVoiceLevel = level
+            guard let self else { return }
+            if await self.applyChange(.selfVoice(level)) {
+                self.selfVoiceLevel = level
+            }
         }
     }
 
@@ -380,44 +395,37 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     func setAutoOff(_ value: AutoOff) {
         Task { [weak self] in
-            guard let self = self, await self.ensureConnected() else { return }
-            let success = await self.setAutoOffValue(value)
-            if success {
+            guard let self else { return }
+            if await self.applyChange(.autoOff(value)) {
                 self.autoOff = value
             }
-            // On failure the observable property is left unchanged (the device kept its old
-            // value); the next status fetch will reconcile.
         }
     }
 
     func setLanguage(_ value: PromptLanguage) {
-        let languageValue = value.rawValue
         Task { [weak self] in
-            guard let self = self, await self.ensureConnected() else { return }
-            _ = await self.send([0x01, 0x03, 0x02, 0x01, languageValue], expecting: [0x01, 0x03])
-            self.language = value
+            guard let self else { return }
+            if await self.applyChange(.promptLanguage(value)) {
+                self.language = value
+            }
         }
     }
 
     func setVoicePrompts(_ on: Bool) {
         Task { [weak self] in
-            guard let self = self, await self.ensureConnected() else { return }
-
-            var languageValue = self.currentLanguageValue & 0x7F
-            if on {
-                languageValue |= 0x80
+            guard let self else { return }
+            if await self.applyChange(.voicePrompts(on)) {
+                self.voicePromptsEnabled = on
             }
-
-            _ = await self.send([0x01, 0x03, 0x02, 0x01, languageValue], expecting: [0x01, 0x03])
-            self.voicePromptsEnabled = on
         }
     }
 
     func setButtonAction(_ value: ButtonAction) {
         Task { [weak self] in
-            guard let self = self, await self.ensureConnected() else { return }
-            _ = await self.send([0x01, 0x09, 0x02, 0x03, 0x10, 0x04, value.rawValue], expecting: [0x01, 0x09])
-            self.buttonAction = value
+            guard let self else { return }
+            if await self.applyChange(.buttonAction(value)) {
+                self.buttonAction = value
+            }
         }
     }
 
@@ -483,8 +491,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             print(">>> Connection successful, initializing Bose protocol...")
 
             Task { [weak self] in
-                guard let self = self else { return }
-                _ = await self.initBoseConnection()
+                guard let self else { return }
                 print(">>> Fetching device info...")
                 await self.fetchAllDeviceInfo()
             }
@@ -792,39 +799,35 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         }
     }
 
-    private func initBoseConnection() async -> Bool {
-        guard let channel = rfcommChannel, channel.isOpen() else {
-            return false
-        }
-
-        // The init handshake reply carries the firmware version (function 0x01). We used to
-        // discard it; capture it via the pure codec so the Info can show it.
-        let response = await send([0x00, 0x01, 0x01, 0x00], expecting: [0x00, 0x01], timeout: 5.0)
-        if let firmware = BoseCodec.decodeFirmware(response) {
-            storeMetadata(DeviceMetadata(firmware: firmware))
-            self.firmware = firmware
-        }
-        return true
-    }
-
     // MARK: - Fetch All Device Info
 
     private func fetchAllDeviceInfo() async {
-        // Only fetch fresh data if cache is stale or we don't have cached data
-        if shouldFetchFreshData() {
-            await fetchBatteryLevel()
-            await fetchSerialNumber()
-            await fetchDeviceStatus()
-            await fetchAutoOffStatus()
-            await fetchButtonActionStatus()
-            markDataAsFetched()
+        guard shouldFetchFreshData() else { return }
+        guard let plugin = activePlugin, let channel = deviceChannel else { return }
 
-            // Fetch paired devices last (it's slower due to per-device status queries)
-            await fetchPairedDevices()
-        }
-        // else: the fetch is throttled (data is < cacheValidityDuration old). No-op — the
-        // observable properties still hold the last-fetched values, so there's nothing to
-        // repopulate (unlike the legacy menu, which had to re-render from cache here).
+        self.supportedFeatures = plugin.supportedFeatures
+
+        // Static metadata (firmware/serial/model) via the plugin; persists by address.
+        let metadata = await plugin.readMetadata(over: channel)
+        storeMetadata(metadata)
+        if let fw = metadata.firmware { self.firmware = fw }
+        if let serial = metadata.serial { self.serial = serial }
+        if let modelId = metadata.modelId { self.deviceId = String(format: "Bose 0x%04X", modelId) }
+
+        // Mutable feature state via the plugin, fanned out to the observable properties.
+        let state = await plugin.readState(over: channel)
+        if let v = state.battery { self.batteryLevel = v }
+        if let v = state.noiseCancellationLevel { self.ncLevel = v }
+        if let v = state.selfVoice { self.selfVoiceLevel = v }
+        if let v = state.autoOff { self.autoOff = v }
+        if let v = state.buttonAction { self.buttonAction = v }
+        if let v = state.promptLanguage { self.language = v }
+        if let v = state.voicePromptsEnabled { self.voicePromptsEnabled = v }
+
+        markDataAsFetched()
+
+        // Paired-device management stays controller-side for this sub-project.
+        await fetchPairedDevices()
     }
 
     private func shouldFetchFreshData() -> Bool {
@@ -838,75 +841,6 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     private func markDataAsFetched() {
         lastDataFetchTime = Date()
-    }
-
-    private func fetchBatteryLevel() async {
-        // Route through the resolved brand plugin over the serialized channel. The plugin
-        // owns the brand-specific encode/decode; this layer just stores and displays.
-        guard let plugin = activePlugin, let channel = deviceChannel else { return }
-
-        if let level = await plugin.readBatteryLevel(over: channel) {
-            self.batteryLevel = level
-        }
-    }
-
-    private func fetchSerialNumber() async {
-        let response = await send(BoseCodec.encodeSerialQuery(), expecting: [0x00, 0x07])
-
-        if let serial = BoseCodec.decodeSerial(response) {
-            storeMetadata(DeviceMetadata(serial: serial))
-            self.serial = serial
-        }
-    }
-
-    private func fetchDeviceStatus() async {
-        let deviceIdResponse = await send(BoseCodec.encodeDeviceIdQuery(), expecting: [0x00, 0x03])
-        if let modelId = BoseCodec.decodeModelId(deviceIdResponse) {
-            storeMetadata(DeviceMetadata(modelId: modelId))
-            self.deviceId = String(format: "Bose 0x%04X", modelId)
-        }
-
-        // The status query provokes several broadcast messages (language, NC, self-voice);
-        // collect everything starting with 0x01 over a short window, then parse.
-        let statusResponse = await collect([0x01, 0x01, 0x05, 0x00], prefix: [0x01], window: 1.0)
-        parseDeviceStatusResponse(statusResponse)
-    }
-
-    private func parseDeviceStatusResponse(_ response: [UInt8]) {
-        // Parse language
-        for i in 0..<response.count {
-            if i + 4 < response.count && response[i] == 0x01 && response[i+1] == 0x03 && response[i+2] == 0x03 {
-                let langByte = response[i+4]
-                let voicePromptsOn = (langByte & 0x80) != 0
-                let langValue = langByte & 0x7F
-
-                currentLanguageValue = langByte
-
-                if let lang = PromptLanguage(rawValue: langValue) {
-                    self.language = lang
-                    self.voicePromptsEnabled = voicePromptsOn
-                }
-                break
-            }
-        }
-
-        // Parse NC level
-        for i in 0..<response.count {
-            if i + 4 < response.count && response[i] == 0x01 && response[i+1] == 0x06 && response[i+2] == 0x03 {
-                let ncByte = response[i+4]
-                self.ncLevel = NoiseCancellationLevel(byte: ncByte)
-                break
-            }
-        }
-
-        // Parse Self Voice level
-        for i in 0..<response.count {
-            if i + 5 < response.count && response[i] == 0x01 && response[i+1] == 0x0b && response[i+2] == 0x03 {
-                let svByte = response[i+5]
-                self.selfVoiceLevel = SelfVoiceLevel(rawValue: svByte)
-                break
-            }
-        }
     }
 
     // Device connection status from GET_DEVICE_INFO
@@ -992,60 +926,6 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
             self.pairedDevices = devices
         }
-    }
-
-    private func fetchAutoOffStatus() async {
-        let command: [UInt8] = [0x01, 0x04, 0x01, 0x00]
-        let response = await send(command, expecting: [0x01, 0x04])
-
-        if response.count >= 5 && response[0] == 0x01 && response[1] == 0x04 && response[2] == 0x03 {
-            let autoOffValue = response[4]
-            self.autoOff = AutoOff(rawValue: autoOffValue)
-        }
-    }
-
-    private func fetchButtonActionStatus() async {
-        // Operator 0x01 = GET (length 0x00). The earlier packet used operator 0x03,
-        // which is the device's STATUS reply shape, not a request — so first-boot
-        // queries got no response and the menu showed no selection. The device
-        // replies with the 0x03 ACK that the parsing below reads.
-        let command: [UInt8] = [0x01, 0x09, 0x01, 0x00]
-        let response = await send(command, expecting: [0x01, 0x09])
-
-        print("Button Action Response: \(response.map { String(format: "0x%02X", $0) }.joined(separator: ", "))")
-
-        // ACK layout: [0x01, 0x09, 0x03, 0x04, 0x10, 0x04, mode, 0x07]
-        // The configured mode is at byte 6; byte 4 is the button-ID (0x10), not the value.
-        if response.count >= 8 && response[0] == 0x01 && response[1] == 0x09 && response[2] == 0x03
-            && response[4] == 0x10 && response[5] == 0x04 {
-            let buttonActionValue = response[6]
-            print("Button Action Value: 0x\(String(format: "%02X", buttonActionValue))")
-            self.buttonAction = ButtonAction(rawValue: buttonActionValue)
-        } else {
-            print("Button Action Response validation failed - count: \(response.count)")
-        }
-    }
-
-    private func getAutoOff() async -> AutoOff {
-        let command: [UInt8] = [0x01, 0x04, 0x01, 0x00]
-        let response = await send(command, expecting: [0x01, 0x04])
-
-        if response.count >= 5 && response[0] == 0x01 && response[1] == 0x04 && response[2] == 0x03 {
-            return AutoOff(rawValue: response[4]) ?? .unknown
-        }
-        return .unknown
-    }
-
-    private func setAutoOffValue(_ minutes: AutoOff) async -> Bool {
-        let command: [UInt8] = [0x01, 0x04, 0x02, 0x01, minutes.rawValue]
-        let response = await send(command, expecting: [0x01, 0x04])
-
-        if response.count >= 4 && response[0] == 0x01 && response[1] == 0x04 {
-            // Verify the setting by reading it back
-            let gotMinutes = await getAutoOff()
-            return gotMinutes == minutes
-        }
-        return false
     }
 
     // MARK: - Metadata helpers
@@ -1161,7 +1041,8 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
         // Independently, react to unsolicited NC status broadcasts so the UI reflects
         // changes made with the physical button even when no command is in flight.
-        if responseData.count >= 5 && responseData[0] == 0x01 && responseData[1] == 0x06 {
+        if activePlugin?.identifier == "Bose",
+           responseData.count >= 5, responseData[0] == 0x01, responseData[1] == 0x06 {
             var ncByte: UInt8
             if responseData[2] == 0x04 && responseData.count == 5 {
                 ncByte = responseData[4]
@@ -1198,6 +1079,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
                 self.isConnected = false
                 self.deviceName = nil
                 self.batteryLevel = nil
+                self.supportedFeatures = []
             }
         }
     }
