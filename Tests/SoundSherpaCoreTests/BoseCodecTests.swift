@@ -124,4 +124,90 @@ final class BoseCodecTests: XCTestCase {
             _ = BoseCodec.decodeModelId(input)
         }
     }
+
+    // MARK: - Control encoders (byte-parity with the old DeviceController)
+
+    func testEncodeNoiseCancellation() {
+        // Old: send([0x01,0x06,0x02,0x01,level.byte])
+        XCTAssertEqual(BoseCodec.encodeNoiseCancellation(.off),  [0x01, 0x06, 0x02, 0x01, 0x00])
+        XCTAssertEqual(BoseCodec.encodeNoiseCancellation(.low),  [0x01, 0x06, 0x02, 0x01, 0x03])
+        XCTAssertEqual(BoseCodec.encodeNoiseCancellation(.high), [0x01, 0x06, 0x02, 0x01, 0x01])
+    }
+
+    func testEncodeStatusQuery() {
+        XCTAssertEqual(BoseCodec.encodeStatusQuery(), [0x01, 0x01, 0x05, 0x00])
+    }
+
+    func testEncodeAutoOff() {
+        XCTAssertEqual(BoseCodec.encodeAutoOffQuery(), [0x01, 0x04, 0x01, 0x00])
+        XCTAssertEqual(BoseCodec.encodeAutoOff(.twenty), [0x01, 0x04, 0x02, 0x01, 0x14])
+    }
+
+    func testDecodeAutoOff() {
+        // STATUS reply [0x01,0x04,0x03,<len>,<value>]
+        XCTAssertEqual(BoseCodec.decodeAutoOff([0x01, 0x04, 0x03, 0x01, 0x14]), .twenty)
+        XCTAssertNil(BoseCodec.decodeAutoOff([0x02, 0x02, 0x03, 0x01, 0x14])) // wrong prefix
+        XCTAssertNil(BoseCodec.decodeAutoOff([0x01, 0x04, 0x03])) // truncated
+    }
+
+    func testEncodeButtonAction() {
+        XCTAssertEqual(BoseCodec.encodeButtonActionQuery(), [0x01, 0x09, 0x01, 0x00])
+        // Old set: send([0x01,0x09,0x02,0x03,0x10,0x04,value.rawValue])
+        XCTAssertEqual(BoseCodec.encodeButtonAction(.alexa),
+                       [0x01, 0x09, 0x02, 0x03, 0x10, 0x04, 0x01])
+    }
+
+    func testDecodeButtonAction() {
+        // ACK [0x01,0x09,0x03,0x04,0x10,0x04,mode,0x07]; mode at byte 6.
+        XCTAssertEqual(
+            BoseCodec.decodeButtonAction([0x01, 0x09, 0x03, 0x04, 0x10, 0x04, 0x02, 0x07]),
+            .noiseCancellation)
+        XCTAssertNil(BoseCodec.decodeButtonAction([0x01, 0x09, 0x03, 0x04, 0x11, 0x04, 0x02, 0x07])) // wrong button id
+        XCTAssertNil(BoseCodec.decodeButtonAction([0x01, 0x09, 0x03])) // truncated
+    }
+
+    func testEncodeSelfVoice() {
+        // Old: send([0x01,0x0b,0x02,0x02,0x01,level.rawValue,0x38])
+        XCTAssertEqual(BoseCodec.encodeSelfVoice(.medium),
+                       [0x01, 0x0b, 0x02, 0x02, 0x01, 0x02, 0x38])
+    }
+
+    func testEncodeLanguage() {
+        // Old: send([0x01,0x03,0x02,0x01,languageByte])
+        XCTAssertEqual(BoseCodec.encodeLanguage(0xA1), [0x01, 0x03, 0x02, 0x01, 0xA1])
+    }
+
+    // MARK: - Status decode (parity with parseDeviceStatusResponse)
+
+    func testDecodeStatusParsesLanguageNCAndSelfVoice() {
+        // Concatenated broadcasts as collected over the status window:
+        //   language: [0x01,0x03,0x03,0x01,0xA1]  (0x21 english + voice-prompt high bit 0x80)
+        //   nc:       [0x01,0x06,0x03,0x01,0x01]  (high)
+        //   selfvoice:[0x01,0x0b,0x03,0x02,0x01,0x02]  (medium at index i+5)
+        let buffer: [UInt8] = [0x01, 0x03, 0x03, 0x01, 0xA1,
+                               0x01, 0x06, 0x03, 0x01, 0x01,
+                               0x01, 0x0b, 0x03, 0x02, 0x01, 0x02]
+        let status = BoseCodec.decodeStatus(buffer)
+        XCTAssertEqual(status.promptLanguage, .english)
+        XCTAssertEqual(status.voicePromptsEnabled, true)
+        XCTAssertEqual(status.languageByte, 0xA1)
+        XCTAssertEqual(status.noiseCancellation, .high)
+        XCTAssertEqual(status.selfVoice, .medium)
+    }
+
+    func testDecodeStatusVoicePromptsOffWhenHighBitClear() {
+        let buffer: [UInt8] = [0x01, 0x03, 0x03, 0x01, 0x21] // english, no high bit
+        let status = BoseCodec.decodeStatus(buffer)
+        XCTAssertEqual(status.promptLanguage, .english)
+        XCTAssertEqual(status.voicePromptsEnabled, false)
+    }
+
+    func testDecodeStatusEmptyBufferYieldsAllNil() {
+        let status = BoseCodec.decodeStatus([])
+        XCTAssertNil(status.noiseCancellation)
+        XCTAssertNil(status.selfVoice)
+        XCTAssertNil(status.promptLanguage)
+        XCTAssertNil(status.voicePromptsEnabled)
+        XCTAssertNil(status.languageByte)
+    }
 }
