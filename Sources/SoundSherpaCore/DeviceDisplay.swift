@@ -13,6 +13,19 @@ public enum DeviceDisplay {
         return .normal
     }
 
+    /// Maps a battery percentage (0–100) to the SF Symbol name used to depict it.
+    /// Lives here (Foundation-only) so both the menu tile and Settings share one
+    /// mapping; the tint color stays in the SwiftUI layer.
+    public static func batterySymbolName(forLevel level: Int) -> String {
+        switch level {
+        case 0...10: return "battery.0percent"
+        case 11...35: return "battery.25percent"
+        case 36...60: return "battery.50percent"
+        case 61...85: return "battery.75percent"
+        default: return "battery.100percent"
+        }
+    }
+
     /// A paired device's human label, falling back to its address when we have
     /// no real name (rather than a vague "Unknown Device").
     public static func pairedDeviceDisplayName(rawName: String, address: String) -> String {
