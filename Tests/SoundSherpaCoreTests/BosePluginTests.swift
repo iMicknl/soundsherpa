@@ -181,4 +181,50 @@ final class BosePluginTests: XCTestCase {
         let result = await plugin.apply(.noiseCancellation(.off), over: channel)
         XCTAssertFalse(result)
     }
+
+    // MARK: - readState (read parity)
+
+    func testReadStateAssemblesAllControls() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+
+        async let state = plugin.readState(over: channel)
+
+        // Order matches readState's send sequence:
+        // 1) battery query → 90%
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest([0x02, 0x02, 0x03, 0x01, 0x5A])
+        // 2) status query (collecting over a window): language(english+voice) / NC high / self-voice medium
+        try await transport.awaitWrite(count: 2)
+        await channel.ingest([0x01, 0x03, 0x03, 0x01, 0xA1])
+        await channel.ingest([0x01, 0x06, 0x03, 0x01, 0x01])
+        await channel.ingest([0x01, 0x0b, 0x03, 0x02, 0x01, 0x02])
+        // 3) auto-off query → 20 minutes
+        try await transport.awaitWrite(count: 3)
+        await channel.ingest([0x01, 0x04, 0x03, 0x01, 0x14])
+        // 4) button-action query → noise cancellation
+        try await transport.awaitWrite(count: 4)
+        await channel.ingest([0x01, 0x09, 0x03, 0x04, 0x10, 0x04, 0x02, 0x07])
+
+        let s = await state
+        XCTAssertEqual(s.battery, 90)
+        XCTAssertEqual(s.noiseCancellationLevel, .high)
+        XCTAssertEqual(s.selfVoice, .medium)
+        XCTAssertEqual(s.promptLanguage, .english)
+        XCTAssertEqual(s.voicePromptsEnabled, true)
+        XCTAssertEqual(s.autoOff, .twenty)
+        XCTAssertEqual(s.buttonAction, .noiseCancellation)
+    }
+
+    func testReadStateLeavesNilFieldsWhenNothingResponds() async {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = BosePlugin()
+        let s = await plugin.readState(over: channel) // everything times out
+        XCTAssertNil(s.battery)
+        XCTAssertNil(s.noiseCancellationLevel)
+        XCTAssertNil(s.autoOff)
+        XCTAssertNil(s.buttonAction)
+    }
 }

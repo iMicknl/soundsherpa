@@ -72,9 +72,35 @@ public struct BosePlugin: DevicePlugin {
         [.noiseCancellation, .selfVoice, .autoOff, .buttonAction, .promptLanguage, .multipoint]
     }
 
-    // Implemented in later tasks (apply: Task 6, readState: Task 7).
     public func readState(over channel: DeviceChannel) async -> DeviceState {
-        DeviceState()
+        var state = DeviceState()
+
+        // Battery (reuse the existing battery path).
+        state.battery = await readBatteryLevel(over: channel)
+
+        // Status broadcasts: collect everything starting 0x01 over a 1s window, then decode.
+        let statusBuffer = (try? await channel.send(
+            BoseCodec.encodeStatusQuery(),
+            matcher: .collecting(prefix: [0x01]),
+            timeout: 1.0)) ?? []
+        let status = BoseCodec.decodeStatus(statusBuffer)
+        state.noiseCancellationLevel = status.noiseCancellation
+        state.selfVoice = status.selfVoice
+        state.promptLanguage = status.promptLanguage
+        state.voicePromptsEnabled = status.voicePromptsEnabled
+        if let langByte = status.languageByte { lastLanguageByte = langByte }
+
+        // Auto-off.
+        let autoOffReply = await sendExpecting(BoseCodec.encodeAutoOffQuery(),
+                                               prefix: [0x01, 0x04], over: channel)
+        state.autoOff = BoseCodec.decodeAutoOff(autoOffReply)
+
+        // Button action.
+        let buttonReply = await sendExpecting(BoseCodec.encodeButtonActionQuery(),
+                                              prefix: [0x01, 0x09], over: channel)
+        state.buttonAction = BoseCodec.decodeButtonAction(buttonReply)
+
+        return state
     }
 
     public func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool {
