@@ -9,7 +9,10 @@ struct SoundSherpaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("SoundSherpa", systemImage: "headphones.over.ear") {
+        // The icon reflects connection state: the standard headphones glyph when a device is
+        // connected, the slashed glyph when nothing is. Reading the observable property here
+        // makes the Scene re-evaluate (and the menu bar icon update) on every change.
+        MenuBarExtra("SoundSherpa", systemImage: controller.isConnected ? "headphones.over.ear" : "headphones.slash") {
             ContentTile()
                 .environment(controller)
         }
