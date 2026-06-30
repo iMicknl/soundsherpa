@@ -83,4 +83,24 @@ final class BosePluginTests: XCTestCase {
         let result = await plugin.readMetadata(over: channel)
         XCTAssertTrue(result.isEmpty)
     }
+
+    // MARK: - Discovery descriptor & capabilities
+
+    func testDiscoveryDescriptorMatchesLegacyBoseLookup() {
+        let d = BosePlugin().discoveryDescriptor
+        XCTAssertEqual(d.serviceMatchers, [.serviceName("SPP Dev"), .uuid("0x1101")])
+        XCTAssertEqual(d.channelHints, [8, 9, 1, 2, 3])
+    }
+
+    func testSupportedFeaturesCoverExistingBoseControls() {
+        let f = BosePlugin().supportedFeatures
+        XCTAssertTrue(f.contains(.noiseCancellation))
+        XCTAssertTrue(f.contains(.selfVoice))
+        XCTAssertTrue(f.contains(.autoOff))
+        XCTAssertTrue(f.contains(.buttonAction))
+        XCTAssertTrue(f.contains(.promptLanguage))
+        // Bose does not expose the Sony-only generic ANC ambient/EQ in this sub-project.
+        XCTAssertFalse(f.contains(.equalizer))
+        XCTAssertFalse(f.contains(.ambientLevel))
+    }
 }

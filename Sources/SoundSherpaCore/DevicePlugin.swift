@@ -31,4 +31,19 @@ public protocol DevicePlugin: Sendable {
     /// channel. Fields the device doesn't report are left nil; a total failure yields an
     /// empty `DeviceMetadata`, never a crash.
     func readMetadata(over channel: DeviceChannel) async -> DeviceMetadata
+
+    /// Pure-data discovery hints: which SPP/vendor service identifiers to look for and which
+    /// RFCOMM channels to try. Replaces the controller's hardcoded "SPP Dev"/[8,9,1,2,3].
+    var discoveryDescriptor: DiscoveryDescriptor { get }
+
+    /// Which features this brand exposes. The UI renders only controls in this set.
+    var supportedFeatures: Set<DeviceFeature> { get }
+
+    /// Read every supported feature's current value in one pass. Unsupported / unavailable
+    /// features are left nil on the returned state.
+    func readState(over channel: DeviceChannel) async -> DeviceState
+
+    /// Apply one typed mutation. Returns whether the device acknowledged it. Never throws;
+    /// returns false for unsupported changes or on timeout / closed channel.
+    func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool
 }

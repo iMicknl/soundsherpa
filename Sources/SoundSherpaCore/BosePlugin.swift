@@ -53,6 +53,25 @@ public struct BosePlugin: DevicePlugin {
         return metadata
     }
 
+    public var discoveryDescriptor: DiscoveryDescriptor {
+        DiscoveryDescriptor(
+            serviceMatchers: [.serviceName("SPP Dev"), .uuid("0x1101")],
+            channelHints: [8, 9, 1, 2, 3])
+    }
+
+    public var supportedFeatures: Set<DeviceFeature> {
+        [.noiseCancellation, .selfVoice, .autoOff, .buttonAction, .promptLanguage, .multipoint]
+    }
+
+    // Implemented in later tasks (apply: Task 6, readState: Task 7).
+    public func readState(over channel: DeviceChannel) async -> DeviceState {
+        DeviceState()
+    }
+
+    public func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool {
+        false
+    }
+
     // MARK: - Private
 
     /// Send `command` and await the reply identified by `prefix`, returning the reply bytes

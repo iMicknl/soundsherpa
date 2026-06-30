@@ -47,4 +47,8 @@ private struct StubPlugin: DevicePlugin {
     func handles(deviceNamed name: String) -> Bool { matcher(name) }
     func readBatteryLevel(over channel: DeviceChannel) async -> Int? { nil }
     func readMetadata(over channel: DeviceChannel) async -> DeviceMetadata { DeviceMetadata() }
+    var discoveryDescriptor: DiscoveryDescriptor { DiscoveryDescriptor(serviceMatchers: [], channelHints: []) }
+    var supportedFeatures: Set<DeviceFeature> { [] }
+    func readState(over channel: DeviceChannel) async -> DeviceState { DeviceState() }
+    func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool { false }
 }
