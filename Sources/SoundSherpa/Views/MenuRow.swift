@@ -6,6 +6,8 @@ import SwiftUI
 /// actions, and the paired-device rows so they all feel like real system rows.
 struct MenuRow<Leading: View, Trailing: View>: View {
     let title: String
+    var titleFont: Font = .body
+    var horizontalInset: CGFloat = 7
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var trailing: () -> Trailing
     let action: () -> Void
@@ -20,8 +22,8 @@ struct MenuRow<Leading: View, Trailing: View>: View {
                 Spacer(minLength: 0)
                 trailing()
             }
-            .font(.body)
-            .padding(.horizontal, 7)
+            .font(titleFont)
+            .padding(.horizontal, horizontalInset)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
             .background(
@@ -54,11 +56,15 @@ extension MenuRow where Leading == AnyView, Trailing == EmptyView {
 // Convenience: SF Symbol leading glyph (or none), custom trailing.
 extension MenuRow where Leading == AnyView {
     init(title: String,
+         titleFont: Font = .body,
+         horizontalInset: CGFloat = 7,
          systemImage: String? = nil,
          @ViewBuilder trailing: @escaping () -> Trailing,
          action: @escaping () -> Void) {
         self.init(
             title: title,
+            titleFont: titleFont,
+            horizontalInset: horizontalInset,
             leading: {
                 AnyView(Group {
                     if let systemImage {

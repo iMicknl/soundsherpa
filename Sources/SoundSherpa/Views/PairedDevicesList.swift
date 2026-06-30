@@ -8,9 +8,9 @@ struct PairedDevicesList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Paired Devices")
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .padding(.leading, 7)
+                .padding(.leading, 2)
             VStack(spacing: 1) {
                 ForEach(devices, id: \.address) { device in
                     MenuRow(

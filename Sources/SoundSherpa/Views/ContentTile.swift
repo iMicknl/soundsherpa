@@ -22,9 +22,18 @@ struct ContentTile: View {
                     selection: controller.ncLevel,
                     onSelect: { controller.setNoiseCancellation($0) })
 
+                SegmentedSection(
+                    title: "Self Voice",
+                    options: [(.off, "Off", "person"),
+                              (.low, "Low", "person.wave.2"),
+                              (.medium, "Medium", "person.wave.2.fill"),
+                              (.high, "High", "person.spatialaudio.stereo.fill")],
+                    selection: controller.selfVoiceLevel,
+                    onSelect: { controller.setSelfVoice($0) })
+
                 // Native-style disclosure: a full-width row with a trailing chevron that
                 // rotates when expanded, revealing the advanced controls inline.
-                MenuRow(title: "More", trailing: {
+                MenuRow(title: "More", titleFont: .system(size: 12, weight: .semibold), horizontalInset: 2, trailing: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -32,15 +41,6 @@ struct ContentTile: View {
                 }, action: { withAnimation(.easeInOut(duration: 0.18)) { showMore.toggle() } })
 
                 if showMore {
-                    SegmentedSection(
-                        title: "Self Voice",
-                        options: [(.off, "Off", "person"),
-                                  (.low, "Low", "person.wave.2"),
-                                  (.medium, "Medium", "person.wave.2.fill"),
-                                  (.high, "High", "person.spatialaudio.stereo.fill")],
-                        selection: controller.selfVoiceLevel,
-                        onSelect: { controller.setSelfVoice($0) })
-
                     PairedDevicesList(devices: controller.pairedDevices) { device in
                         if device.isConnected {
                             controller.disconnectPairedDevice(device)

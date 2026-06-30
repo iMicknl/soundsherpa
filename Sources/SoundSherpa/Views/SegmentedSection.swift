@@ -11,9 +11,9 @@ struct SegmentedSection<Value: Hashable>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .padding(.leading, 7)
+                .padding(.leading, 2)
             HStack(spacing: 6) {
                 ForEach(options, id: \.value) { option in
                     pill(option)
