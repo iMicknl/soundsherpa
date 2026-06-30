@@ -32,3 +32,42 @@ final class SonyPluginTests: XCTestCase {
         XCTAssertFalse(f.contains(.selfVoice))     // Bose-only
     }
 }
+
+extension SonyPluginTests {
+
+    // Helper: build a full reply frame from a payload the test wants the "device" to send.
+    private func frame(_ payload: [UInt8], seq: UInt8 = 0) -> [UInt8] {
+        SonyFraming.encode(type: .command1, seq: seq, payload: payload)
+    }
+
+    func testReadBatteryNegotiatesV2ThenDecodes() async throws {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        let plugin = SonyPlugin()
+
+        async let level = plugin.readBatteryLevel(over: channel)
+        // 1) init query -> V2 reply (payload length 8)
+        try await transport.awaitWrite(count: 1)
+        await channel.ingest(frame([0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00]))
+        // 2) battery query -> reply payload [0x23,0x00,0x5A,...] = 90% (VERIFY ON HARDWARE)
+        try await transport.awaitWrite(count: 2)
+        await channel.ingest(frame([0x23, 0x00, 0x5A, 0x01]))
+
+        let result = await level
+        XCTAssertEqual(result, 90)
+
+        // First write must be the framed init query (payload 00 00).
+        let writes = await transport.writes
+        XCTAssertEqual(writes.first, SonyFraming.encode(type: .command1, seq: 0, payload: [0x00, 0x00]))
+        // Second write must be the V2 battery query payload, framed.
+        XCTAssertEqual(writes[1], SonyFraming.encode(type: .command1, seq: writes[1][2], payload: [0x22, 0x00]))
+    }
+
+    func testReadBatteryReturnsNilWhenNegotiationFails() async {
+        let transport = ScriptedTransport()
+        let channel = DeviceChannel(transport: transport)
+        // No init reply ingested -> negotiation times out -> nil, never a throw/crash.
+        let result = await SonyPlugin().readBatteryLevel(over: channel)
+        XCTAssertNil(result)
+    }
+}

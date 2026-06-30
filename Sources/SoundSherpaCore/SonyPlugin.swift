@@ -38,9 +38,50 @@ public struct SonyPlugin: DevicePlugin {
         [.noiseCancellation, .ambientLevel, .focusOnVoice, .equalizer]
     }
 
-    // Filled in Tasks 9–11.
-    public func readBatteryLevel(over channel: DeviceChannel) async -> Int? { nil }
-    public func readMetadata(over channel: DeviceChannel) async -> DeviceMetadata { DeviceMetadata() }
+    // MARK: - Framed send
+
+    /// Frame `payload`, send it, and return the DECODED reply frame's payload (or [] on
+    /// timeout/closed). All Sony frames start with 0x3E, so we match on that prefix. Swallows
+    /// DeviceError to [] per the no-throw plugin contract.
+    private func sendFramed(_ payload: [UInt8],
+                            over channel: DeviceChannel,
+                            timeout: TimeInterval = 0.5) async -> [UInt8] {
+        let seq = versionBox.seq
+        let frame = SonyFraming.encode(type: .command1, seq: seq, payload: payload)
+        let reply = (try? await channel.send(frame, matcher: .prefix([0x3E]), timeout: timeout)) ?? []
+        guard let decoded = SonyFraming.decode(reply) else { return [] }
+        return decoded.payload
+    }
+
+    /// Negotiate (and cache) the dialect once per channel. Returns nil if the device never
+    /// answers the init query, leaving the plugin in the "connected but unreadable" state.
+    private func negotiateVersion(over channel: DeviceChannel) async -> SonyProtocol? {
+        if let cached = versionBox.version { return cached }
+        let reply = await sendFramed(SonyCodec.encodeInitQuery(), over: channel, timeout: 2.0)
+        guard let version = SonyProtocol.classify(initReplyPayloadLength: reply.count) else {
+            return nil
+        }
+        versionBox.version = version
+        return version
+    }
+
+    public func readBatteryLevel(over channel: DeviceChannel) async -> Int? {
+        guard let version = await negotiateVersion(over: channel) else { return nil }
+        let reply = await sendFramed(SonyCodec.encodeBatteryQuery(version: version), over: channel)
+        return SonyCodec.decodeBattery(reply, version: version)
+    }
+
+    public func readMetadata(over channel: DeviceChannel) async -> DeviceMetadata {
+        var metadata = DeviceMetadata()
+        guard let version = await negotiateVersion(over: channel) else { return metadata }
+        let fwReply = await sendFramed(SonyCodec.encodeFirmwareQuery(version: version), over: channel)
+        if let fw = SonyCodec.decodeFirmware(fwReply, version: version) {
+            metadata.firmware = fw
+        }
+        return metadata
+    }
+
+    // Filled in Tasks 10–11.
     public func readState(over channel: DeviceChannel) async -> DeviceState { DeviceState() }
     public func apply(_ change: DeviceChange, over channel: DeviceChannel) async -> Bool { false }
 }
