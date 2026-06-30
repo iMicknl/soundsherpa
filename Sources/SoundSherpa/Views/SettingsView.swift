@@ -66,12 +66,18 @@ struct SettingsView: View {
                                     Text($0.displayName).tag($0)
                                 }
                             }
+                            Text("Turn the headphones off after a period of inactivity to save battery.")
+                                .font(.caption).foregroundStyle(.secondary)
+
                             Picker("Button Action", selection: Binding(
                                 get: { controller.buttonAction ?? .noiseCancellation },
                                 set: { controller.setButtonAction($0) })) {
                                 Text("Alexa").tag(ButtonAction.alexa)
                                 Text("Noise Cancellation").tag(ButtonAction.noiseCancellation)
                             }
+                            Text("Choose what a press of the headphones' action button does.")
+                                .font(.caption).foregroundStyle(.secondary)
+
                             Picker("Language", selection: Binding(
                                 get: { controller.language ?? .english },
                                 set: { controller.setLanguage($0) })) {
@@ -82,14 +88,24 @@ struct SettingsView: View {
                                 set: { controller.setVoicePrompts($0) }))
                         }
 
-                        // Read-only device identity, moved here from About (nil → row hidden).
-                        if hasDeviceInfo {
-                            Section("Information") {
-                                if let v = controller.firmware { LabeledContent("Firmware", value: v) }
-                                if let v = controller.serial { LabeledContent("Serial Number", value: v) }
-                                if let v = controller.deviceId { LabeledContent("Device ID", value: v) }
-                                if let v = controller.services, !v.isEmpty {
-                                    LabeledContent("Services", value: v.joined(separator: ", "))
+                        Section("About this device") {
+                            if let level = controller.batteryLevel {
+                                LabeledContent("Battery") { BatteryLabel(level: level) }
+                            }
+                            if let v = controller.firmware { LabeledContent("Firmware", value: v) }
+                            if let v = controller.serial { LabeledContent("Serial Number", value: v) }
+                        }
+
+                        if hasAdvancedInfo {
+                            Section {
+                                DisclosureGroup("Advanced details") {
+                                    if let v = controller.deviceId { LabeledContent("Device ID", value: v) }
+                                    if let v = controller.services, !v.isEmpty {
+                                        LabeledContent("Services") {
+                                            Text(v.joined(separator: ", "))
+                                                .multilineTextAlignment(.trailing)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -136,9 +152,9 @@ struct SettingsView: View {
         }
     }
 
-    private var hasDeviceInfo: Bool {
-        controller.firmware != nil || controller.serial != nil
-            || controller.deviceId != nil || !(controller.services ?? []).isEmpty
+    /// Pure-debug identity fields shown under the collapsed "Advanced details".
+    private var hasAdvancedInfo: Bool {
+        controller.deviceId != nil || !(controller.services ?? []).isEmpty
     }
 
     private var aboutTab: some View {
