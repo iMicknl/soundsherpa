@@ -13,11 +13,12 @@ public enum DeviceDisplay {
         return .normal
     }
 
-    /// A paired device's human label, or "Unknown Device" when all we have is its address.
+    /// A paired device's human label, falling back to its address when we have
+    /// no real name (rather than a vague "Unknown Device").
     public static func pairedDeviceDisplayName(rawName: String, address: String) -> String {
         let trimmed = rawName.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return "Unknown Device" }
-        if trimmed.caseInsensitiveCompare(address) == .orderedSame { return "Unknown Device" }
+        if trimmed.isEmpty { return address }
+        if trimmed.caseInsensitiveCompare(address) == .orderedSame { return address }
         return trimmed
     }
 }
