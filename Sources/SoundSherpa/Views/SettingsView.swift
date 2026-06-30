@@ -30,18 +30,23 @@ struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
-            Toggle("Start on login", isOn: Binding(
-                get: { startOnLogin },
-                set: { setStartOnLogin($0) }))
-            if let loginError {
-                Text(loginError).font(.footnote).foregroundStyle(.red)
+            Section {
+                Toggle("Start on login", isOn: Binding(
+                    get: { startOnLogin },
+                    set: { setStartOnLogin($0) }))
+                if let loginError {
+                    Text(loginError).font(.footnote).foregroundStyle(.red)
+                }
             }
-            Picker("Menu bar icon", selection: Binding(
-                get: { MenuBarIconStyle(rawValue: iconStyleRaw) ?? .followConnection },
-                set: { iconStyleRaw = $0.rawValue })) {
-                ForEach(MenuBarIconStyle.allCases) { Text($0.displayName).tag($0) }
+            Section {
+                Picker("Menu bar icon", selection: Binding(
+                    get: { MenuBarIconStyle(rawValue: iconStyleRaw) ?? .followConnection },
+                    set: { iconStyleRaw = $0.rawValue })) {
+                    ForEach(MenuBarIconStyle.allCases) { Text($0.displayName).tag($0) }
+                }
             }
         }
+        .formStyle(.grouped)
         .onAppear { refreshLoginStatus() }
     }
 
@@ -89,6 +94,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .formStyle(.grouped)
     }
 
     private var hasDeviceInfo: Bool {
