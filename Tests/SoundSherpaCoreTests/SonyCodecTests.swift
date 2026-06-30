@@ -120,3 +120,61 @@ extension SonyCodecTests {
         XCTAssertNil(SonyCodec.decodeANC([], version: .v1))
     }
 }
+
+extension SonyCodecTests {
+
+    // MARK: - EQ preset (asserted, setEqualizerPreset; V1 byte1=0x01, V2 byte1=0x00)
+    func testEncodeEQPresetV1Off() {
+        let s = EqualizerState(presetId: 0x00, bands: [])
+        XCTAssertEqual(SonyCodec.encodeEQ(s, version: .v1), [0x58, 0x01, 0x00, 0x00])
+    }
+
+    func testEncodeEQPresetV1BassBoost() {
+        let s = EqualizerState(presetId: 0x16, bands: [])
+        XCTAssertEqual(SonyCodec.encodeEQ(s, version: .v1), [0x58, 0x01, 0x16, 0x00])
+    }
+
+    func testEncodeEQPresetV2Off() {
+        let s = EqualizerState(presetId: 0x00, bands: [])
+        XCTAssertEqual(SonyCodec.encodeEQ(s, version: .v2), [0x58, 0x00, 0x00, 0x00])
+    }
+
+    func testEncodeEQPresetV2Bright() {
+        let s = EqualizerState(presetId: 0x10, bands: [])
+        XCTAssertEqual(SonyCodec.encodeEQ(s, version: .v2), [0x58, 0x00, 0x10, 0x00])
+    }
+
+    // MARK: - EQ custom bands (asserted; 6 bands, gain+10; V1 marker 0xFF, V2 marker 0xA0)
+    func testEncodeEQCustomBandsV1Flat() {
+        let s = EqualizerState(presetId: 0xA1, bands: [0, 0, 0, 0, 0, 0])
+        XCTAssertEqual(SonyCodec.encodeEQ(s, version: .v1),
+                       [0x58, 0x01, 0xFF, 0x06, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A])
+    }
+
+    func testEncodeEQCustomBandsV2Mixed() {
+        // gains [0,0,1,2,3,1] -> +10 -> [0x0A,0x0A,0x0B,0x0C,0x0D,0x0B]
+        let s = EqualizerState(presetId: 0xA1, bands: [0, 0, 1, 2, 3, 1])
+        XCTAssertEqual(SonyCodec.encodeEQ(s, version: .v2),
+                       [0x58, 0x00, 0xA0, 0x06, 0x0A, 0x0A, 0x0B, 0x0C, 0x0D, 0x0B])
+    }
+
+    // MARK: - EQ status query (asserted: V1 0x56 0x01; V2 0x56 0x00)
+    func testEncodeEQStatusQuery() {
+        XCTAssertEqual(SonyCodec.encodeEQStatusQuery(version: .v1), [0x56, 0x01])
+        XCTAssertEqual(SonyCodec.encodeEQStatusQuery(version: .v2), [0x56, 0x00])
+    }
+
+    // MARK: - EQ status reply decode (asserted V2 full-frame payloads, handleEqualizer)
+    // OFF reply payload: 59 00 00 06 0a 0a 0a 0a 0a 0a ; MANUAL: 59 00 a0 06 0a 0a 0a 0a 0a 0a
+    func testDecodeEQV2OffPreset() {
+        let payload: [UInt8] = [0x59, 0x00, 0x00, 0x06, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A, 0x0A]
+        let s = SonyCodec.decodeEQ(payload, version: .v2)
+        XCTAssertEqual(s?.presetId, 0x00)
+        XCTAssertEqual(s?.bands, [0, 0, 0, 0, 0, 0])
+    }
+
+    func testDecodeEQRejectsGarbage() {
+        XCTAssertNil(SonyCodec.decodeEQ([0x00], version: .v2))
+        XCTAssertNil(SonyCodec.decodeEQ([], version: .v1))
+    }
+}

@@ -82,4 +82,45 @@ public enum SonyCodec {
                             focusOnVoice: payload[6] != 0x00)
         }
     }
+
+    // MARK: - Equalizer (command 0x58)
+
+    private static let customPresetId = 0xA1  // CUSTOM_1
+
+    /// Encode an EQ change. Preset IDs are the raw Sony values stored on `EqualizerState`.
+    /// A custom preset (presetId 0xA1 with bands) emits the 6-band payload; gains are encoded
+    /// as value+10. V1 vs V2 differ in the byte after the 0x58 command (V1=0x01, V2=0x00) and
+    /// the custom-bands marker (V1=0xFF, V2=0xA0).
+    public static func encodeEQ(_ state: EqualizerState, version: SonyProtocol) -> [UInt8] {
+        let dialectByte: UInt8 = (version == .v1) ? 0x01 : 0x00
+        let isCustom = (state.presetId == customPresetId) && !state.bands.isEmpty
+        if isCustom {
+            let marker: UInt8 = (version == .v1) ? 0xFF : 0xA0
+            var out: [UInt8] = [0x58, dialectByte, marker, UInt8(state.bands.count)]
+            out.append(contentsOf: state.bands.map { UInt8(min(255, max(0, $0 + 10))) })
+            return out
+        }
+        let preset = UInt8(state.presetId ?? 0x00)
+        return [0x58, dialectByte, preset, 0x00]
+    }
+
+    public static func encodeEQStatusQuery(version: SonyProtocol) -> [UInt8] {
+        switch version {
+        case .v1: return [0x56, 0x01]
+        case .v2: return [0x56, 0x00]
+        }
+    }
+
+    /// Decode an EQ status reply `[0x59, <dialect>, <presetId>, <count>, <bands…>]`.
+    /// Bands are decoded from value+10 back to signed dB. Asserted against V2 vectors.
+    public static func decodeEQ(_ payload: [UInt8], version: SonyProtocol) -> EqualizerState? {
+        guard payload.count >= 4, payload[0] == 0x59 else { return nil }
+        let presetId = Int(payload[2])
+        let count = Int(payload[3])
+        guard payload.count >= 4 + count else {
+            return EqualizerState(presetId: presetId, bands: [])
+        }
+        let bands = payload[4..<(4 + count)].map { Int($0) - 10 }
+        return EqualizerState(presetId: presetId, bands: Array(bands))
+    }
 }
