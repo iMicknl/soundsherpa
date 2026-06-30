@@ -5,20 +5,27 @@ import SoundSherpaCore
 /// The app's Settings window (⌘,). General hosts app-level preferences;
 /// Device hosts the set-once headphone controls; About is read-only info.
 struct SettingsView: View {
+    private enum Tab: Hashable { case general, device, about }
+
     @Environment(DeviceController.self) private var controller
     @AppStorage("menuBarIconStyle") private var iconStyleRaw = MenuBarIconStyle.followConnection.rawValue
 
     @State private var startOnLogin = false
     @State private var loginError: String?
+    @State private var selection = Tab.general
 
     var body: some View {
-        TabView {
-            generalTab.tabItem { Label("General", systemImage: "gearshape") }
-            deviceTab.tabItem { Label("Device", systemImage: "headphones") }
-            aboutTab.tabItem { Label("About", systemImage: "info.circle") }
+        TabView(selection: $selection) {
+            generalTab.tabItem { Label("General", systemImage: "gearshape") }.tag(Tab.general)
+            deviceTab.tabItem { Label("Device", systemImage: "headphones") }.tag(Tab.device)
+            aboutTab.tabItem { Label("About", systemImage: "info.circle") }.tag(Tab.about)
         }
         .frame(width: 420, height: 320)
         .padding()
+        // The Settings scene's view tree persists across window close/reopen, so the
+        // TabView would otherwise reopen on whatever tab was last viewed. Reset to
+        // General when the window closes so the next open always starts there.
+        .background(WindowCloseObserver { selection = .general })
     }
 
     private var generalTab: some View {
@@ -185,5 +192,41 @@ struct SettingsView: View {
         }
         // Re-read the real status so the toggle reflects truth even on failure.
         refreshLoginStatus()
+    }
+}
+
+/// Invokes `onClose` when the hosting window closes. Used to reset Settings to the
+/// General tab between opens, since the Settings scene's view tree is long-lived.
+private struct WindowCloseObserver: NSViewRepresentable {
+    let onClose: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onClose: onClose) }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        // Defer until the view is in the hierarchy and has a window to observe.
+        DispatchQueue.main.async { context.coordinator.observe(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onClose = onClose
+    }
+
+    final class Coordinator {
+        var onClose: () -> Void
+
+        init(onClose: @escaping () -> Void) { self.onClose = onClose }
+
+        func observe(_ window: NSWindow?) {
+            guard let window else { return }
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(windowWillClose),
+                name: NSWindow.willCloseNotification, object: window)
+        }
+
+        @objc private func windowWillClose() { onClose() }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
     }
 }
