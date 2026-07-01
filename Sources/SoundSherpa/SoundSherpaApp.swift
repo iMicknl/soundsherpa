@@ -24,9 +24,10 @@ struct SoundSherpaApp: App {
             ContentTile(dismissMenu: { isMenuPresented = false })
                 .environment(controller)
         } label: {
-            MenuBarLabel(content: menuBarContent,
-                         isConnected: controller.isConnected,
-                         batteryLevel: controller.batteryLevel)
+            Image(nsImage: MenuBarIconRenderer.image(
+                content: menuBarContent,
+                isConnected: controller.isConnected,
+                batteryLevel: controller.batteryLevel))
         }
         .menuBarExtraAccess(isPresented: $isMenuPresented)
         .menuBarExtraStyle(.window)
@@ -34,33 +35,6 @@ struct SoundSherpaApp: App {
         Settings {
             SettingsView()
                 .environment(controller)
-        }
-    }
-}
-
-/// The menu bar glyph plus optional battery percentage. Monochrome by default;
-/// tints amber/red only at low charge. Falls back to icon-only when there is no
-/// battery level (disconnected, or not yet read).
-private struct MenuBarLabel: View {
-    let content: MenuBarContent
-    let isConnected: Bool
-    let batteryLevel: Int?
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Image(systemName: content.connectionSymbolName(isConnected: isConnected))
-            if content.showsBattery, let level = batteryLevel {
-                Text("\(level)%").foregroundStyle(tint(forLevel: level))
-            }
-        }
-    }
-
-    /// Monochrome (`.primary`) unless the level is low/critical.
-    private func tint(forLevel level: Int) -> Color {
-        switch DeviceDisplay.menuBarBatteryTier(forLevel: level) {
-        case .critical: return .red
-        case .low:      return .orange
-        case .normal:   return .primary
         }
     }
 }
