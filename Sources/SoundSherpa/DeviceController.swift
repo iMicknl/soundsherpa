@@ -516,7 +516,9 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
                     let data = withUnsafePointer(to: &uuidBytes) { ptr in
                         Data(bytes: ptr, count: MemoryLayout<uuid_t>.size)
                     }
-                    let btUUID = IOBluetoothSDPUUID(bytes: (data as NSData).bytes, length: data.count)
+                    let btUUID = data.withUnsafeBytes { ptr in
+                        IOBluetoothSDPUUID(bytes: ptr.baseAddress!, length: data.count)
+                    }
                     for record in records {
                         if record.hasService(from: [btUUID]) { return record }
                     }
