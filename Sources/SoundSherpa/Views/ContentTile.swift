@@ -35,25 +35,24 @@ struct ContentTile: View {
                         onSelect: { controller.setSelfVoice($0) })
                 }
 
-                // Native-style disclosure: a full-width row with a trailing chevron that
-                // rotates when expanded, revealing the advanced controls inline.
-                MenuRow(title: "More", titleFont: .system(size: 12, weight: .semibold), horizontalInset: 8, trailing: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(showMore ? 90 : 0))
-                }, action: { withAnimation(.easeInOut(duration: 0.18)) { showMore.toggle() } })
-                // Bleed the hover pill outward toward the tile edges while keeping the
-                // label/chevron visually aligned with the rows above (inset bumped +6 to
-                // counteract the -6 padding). Native menu-row idiom.
-                .padding(.horizontal, -6)
+                if controller.supportedFeatures.contains(.multipoint) {
+                    // Native-style disclosure: a full-width row with a trailing chevron that
+                    // rotates when expanded, revealing the paired-device controls inline.
+                    MenuRow(title: "More", titleFont: .system(size: 12, weight: .semibold), horizontalInset: 8, trailing: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(showMore ? 90 : 0))
+                    }, action: { withAnimation(.easeInOut(duration: 0.18)) { showMore.toggle() } })
+                    .padding(.horizontal, -6)
 
-                if showMore {
-                    PairedDevicesList(devices: controller.pairedDevices) { device in
-                        if device.isConnected {
-                            controller.disconnectPairedDevice(device)
-                        } else {
-                            controller.connectPairedDevice(device)
+                    if showMore {
+                        PairedDevicesList(devices: controller.pairedDevices) { device in
+                            if device.isConnected {
+                                controller.disconnectPairedDevice(device)
+                            } else {
+                                controller.connectPairedDevice(device)
+                            }
                         }
                     }
                 }
