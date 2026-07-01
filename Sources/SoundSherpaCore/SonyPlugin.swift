@@ -65,12 +65,17 @@ public struct SonyPlugin: DevicePlugin {
     /// Negotiate (and cache) the dialect once per channel. Returns nil if the device never
     /// answers the init query, leaving the plugin in the "connected but unreadable" state.
     private func negotiateVersion(over channel: DeviceChannel) async -> SonyProtocol? {
-        if let cached = versionBox.version { return cached }
+        let id = ObjectIdentifier(channel)
+        if versionBox.channelID == id, let cached = versionBox.version {
+            return cached
+        }
         let reply = await sendFramed(SonyCodec.encodeInitQuery(), over: channel, timeout: 2.0)
         guard let version = SonyProtocol.classify(initReplyPayloadLength: reply.count) else {
             return nil
         }
         versionBox.version = version
+        versionBox.channelID = id
+        versionBox.seq = 0
         return version
     }
 
@@ -127,7 +132,9 @@ public struct SonyPlugin: DevicePlugin {
 
 /// Reference box for the negotiated dialect + sequence byte. See the SAFETY note on
 /// `SonyPlugin.versionBox` — single-channel serialization is what makes @unchecked safe.
+/// The version is channel-scoped and re-negotiated when the channel changes (reconnect).
 final class SonyVersionBox: @unchecked Sendable {
     var version: SonyProtocol?
+    var channelID: ObjectIdentifier?
     var seq: UInt8 = 0
 }

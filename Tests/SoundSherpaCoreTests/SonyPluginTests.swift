@@ -161,4 +161,44 @@ extension SonyPluginTests {
         let r = await SonyPlugin().apply(.equalizer(EqualizerState(presetId: 0x00)), over: channel)
         XCTAssertFalse(r, "apply should return false on negotiation timeout")
     }
+
+    func testRenegotiatesDialectAcrossChannelReconnects() async throws {
+        let plugin = SonyPlugin()
+
+        // --- Channel A: negotiate V2, read battery via V2 path ---
+        let transportA = ScriptedTransport()
+        let channelA = DeviceChannel(transport: transportA)
+
+        async let l1 = plugin.readBatteryLevel(over: channelA)
+        // 1) init query -> V2 reply (payload length 8)
+        try await transportA.awaitWrite(count: 1)
+        await channelA.ingest(frame([0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00]))
+        // 2) battery query (V2 payload [0x22,0x00]) -> reply 90%
+        try await transportA.awaitWrite(count: 2)
+        let writesA = await transportA.writes
+        // Verify A sent V2 battery query
+        XCTAssertEqual(SonyFraming.decode(writesA[1])?.payload, [0x22, 0x00], "Channel A must use V2 battery query")
+        await channelA.ingest(frame([0x23, 0x00, 0x5A, 0x01]))
+        let _ = await l1
+
+        // --- Channel B (same plugin): must RE-negotiate; classify V1, read battery via V1 path ---
+        let transportB = ScriptedTransport()
+        let channelB = DeviceChannel(transport: transportB)
+
+        async let l2 = plugin.readBatteryLevel(over: channelB)
+        // 1) MUST send init query again (new channel)
+        try await transportB.awaitWrite(count: 1)
+        let writesB = await transportB.writes
+        // CRITICAL ASSERTION: first write must be init query, NOT a stale V2 battery query!
+        XCTAssertEqual(SonyFraming.decode(writesB.first!)?.payload, [0x00, 0x00], "Channel B must RE-negotiate (send init query, not reuse stale V2)")
+        // Ingest V1 reply (payload length 4)
+        await channelB.ingest(frame([0x01, 0x00, 0x40, 0x10]))
+        // 2) battery query (V1 payload [0x10,0x00]) -> reply 90%
+        try await transportB.awaitWrite(count: 2)
+        let writesB2 = await transportB.writes
+        // Verify B sent V1 battery query (not V2 [0x22,0x00])
+        XCTAssertEqual(SonyFraming.decode(writesB2[1])?.payload, [0x10, 0x00], "Channel B must send V1 battery query (re-classified, not stale V2)")
+        await channelB.ingest(frame([0x11, 0x00, 0x5A, 0x01]))
+        let _ = await l2
+    }
 }
