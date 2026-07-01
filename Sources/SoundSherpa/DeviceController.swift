@@ -502,16 +502,25 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             case .serviceName(let wanted):
                 if let r = records.first(where: { $0.getServiceName() == wanted }) { return r }
             case .uuid(let uuidString):
-                // For Bose, we use the hex short-form UUID (e.g., "0x1101" for SPP).
-                // If it starts with "0x", parse it as a 16-bit UUID and match directly.
+                // 16-bit short form, e.g. "0x1101" (Bose SPP): match directly.
                 if uuidString.hasPrefix("0x"), let v = UInt16(uuidString.dropFirst(2), radix: 16) {
                     for record in records {
                         if record.matchesUUID16(v) { return record }
                     }
+                    continue
                 }
-                // For full UUID strings, we'd need IOBluetoothSDPUUID, but Bose only uses
-                // short-form UUIDs, so we skip this path for now. A future plugin needing
-                // full UUIDs can extend this.
+                // 128-bit vendor UUID (e.g. Sony's V1/V2 service UUIDs): build an
+                // IOBluetoothSDPUUID and match it against each record's service UUIDs.
+                if let uuid = UUID(uuidString: uuidString) {
+                    var uuidBytes = uuid.uuid
+                    let data = withUnsafePointer(to: &uuidBytes) { ptr in
+                        Data(bytes: ptr, count: MemoryLayout<uuid_t>.size)
+                    }
+                    let btUUID = IOBluetoothSDPUUID(bytes: (data as NSData).bytes, length: data.count)
+                    for record in records {
+                        if record.hasService(from: [btUUID]) { return record }
+                    }
+                }
             }
         }
         return nil
