@@ -8,7 +8,7 @@ struct SettingsView: View {
     private enum Tab: Hashable { case general, device, about }
 
     @Environment(DeviceController.self) private var controller
-    @AppStorage("menuBarIconStyle") private var iconStyleRaw = MenuBarIconStyle.followConnection.rawValue
+    @AppStorage("menuBarContent") private var contentRaw = MenuBarContent.iconOnly.rawValue
 
     @State private var startOnLogin = false
     @State private var loginError: String?
@@ -75,10 +75,10 @@ struct SettingsView: View {
                 }
             }
             Section {
-                Picker("Menu bar icon", selection: Binding(
-                    get: { MenuBarIconStyle(rawValue: iconStyleRaw) ?? .followConnection },
-                    set: { iconStyleRaw = $0.rawValue })) {
-                    ForEach(MenuBarIconStyle.allCases) { Text($0.displayName).tag($0) }
+                Picker("Menu bar", selection: Binding(
+                    get: { MenuBarContent(rawValue: contentRaw) ?? .iconOnly },
+                    set: { contentRaw = $0.rawValue })) {
+                    ForEach(MenuBarContent.allCases) { Text($0.displayName).tag($0) }
                 }
             }
         }
