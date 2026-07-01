@@ -15,3 +15,14 @@ final class DeviceDisplayBatterySymbolTests: XCTestCase {
         XCTAssertEqual(DeviceDisplay.batterySymbolName(forLevel: 100), "battery.100percent")
     }
 }
+
+final class DeviceDisplayMenuBarTierTests: XCTestCase {
+    func testMenuBarTierBoundaries() {
+        XCTAssertEqual(DeviceDisplay.menuBarBatteryTier(forLevel: 0), .critical)
+        XCTAssertEqual(DeviceDisplay.menuBarBatteryTier(forLevel: 15), .critical)
+        XCTAssertEqual(DeviceDisplay.menuBarBatteryTier(forLevel: 16), .low)
+        XCTAssertEqual(DeviceDisplay.menuBarBatteryTier(forLevel: 30), .low)
+        XCTAssertEqual(DeviceDisplay.menuBarBatteryTier(forLevel: 31), .normal)
+        XCTAssertEqual(DeviceDisplay.menuBarBatteryTier(forLevel: 100), .normal)
+    }
+}

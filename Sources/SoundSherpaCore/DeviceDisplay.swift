@@ -13,6 +13,15 @@ public enum DeviceDisplay {
         return .normal
     }
 
+    /// Menu-bar low-battery tier. Lower thresholds than `batteryTier` (≤15
+    /// critical, ≤30 low) so the menu bar stays monochrome the vast majority of
+    /// the time and only tints when charge genuinely matters.
+    public static func menuBarBatteryTier(forLevel level: Int) -> BatteryTier {
+        if level <= 15 { return .critical }
+        if level <= 30 { return .low }
+        return .normal
+    }
+
     /// Maps a battery percentage (0–100) to the SF Symbol name used to depict it.
     /// Lives here (Foundation-only) so both the menu tile and Settings share one
     /// mapping; the tint color stays in the SwiftUI layer.
