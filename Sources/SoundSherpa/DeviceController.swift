@@ -808,7 +808,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         storeMetadata(metadata)
         if let fw = metadata.firmware { self.firmware = fw }
         if let serial = metadata.serial { self.serial = serial }
-        if let modelId = metadata.modelId { self.deviceId = String(format: "Bose 0x%04X", modelId) }
+        if let modelId = metadata.modelId { self.deviceId = plugin.deviceIdLabel(modelId: modelId) }
 
         // Mutable feature state via the plugin, fanned out to the observable properties.
         let state = await plugin.readState(over: channel)
@@ -942,7 +942,7 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         if meta.vendorId != nil || meta.productId != nil {
             deviceIdValue = "\(meta.vendorId ?? "?") / \(meta.productId ?? "?")"
         } else if let modelId = meta.modelId {
-            deviceIdValue = String(format: "Bose 0x%04X", modelId)
+            deviceIdValue = (activePlugin ?? BosePlugin()).deviceIdLabel(modelId: modelId)
         } else {
             deviceIdValue = nil
         }
