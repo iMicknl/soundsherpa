@@ -306,6 +306,21 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
 
     // MARK: - Intents
 
+    /// Apply a plugin-decoded unsolicited change to observable state. Mirrors the per-feature
+    /// observable property the corresponding control binds to. Unsupported cases are ignored.
+    private func reflectUnsolicited(_ change: DeviceChange) {
+        switch change {
+        case .noiseCancellation(let level):
+            self.ncLevel = level
+        case .anc(let state):
+            self.ancState = state
+        case .selfVoice(let level):
+            self.selfVoiceLevel = level
+        case .equalizer, .autoOff, .buttonAction, .promptLanguage, .voicePrompts:
+            break  // not reflected from unsolicited broadcasts in this sub-project
+        }
+    }
+
     /// Apply a typed change through the active plugin over the serialized channel. Returns
     /// whether it was acknowledged. Mirrors the old per-intent send, but brand-agnostic.
     private func applyChange(_ change: DeviceChange) async -> Bool {
@@ -1055,20 +1070,11 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         // command. The actor decides whether this chunk matches via its ResponseMatcher.
         ingestContinuation?.yield(responseData)
 
-        // Independently, react to unsolicited NC status broadcasts so the UI reflects
-        // changes made with the physical button even when no command is in flight.
-        if activePlugin?.identifier == "Bose",
-           responseData.count >= 5, responseData[0] == 0x01, responseData[1] == 0x06 {
-            var ncByte: UInt8
-            if responseData[2] == 0x04 && responseData.count == 5 {
-                ncByte = responseData[4]
-            } else if responseData[2] == 0x03 && responseData.count >= 5 {
-                ncByte = responseData[4]
-            } else {
-                ncByte = responseData[4]
-            }
+        // Independently, let the active plugin decode unsolicited broadcasts (e.g. ANC changed
+        // via an on-device button) so the UI reflects them even with no command in flight.
+        if let change = activePlugin?.decodeUnsolicited(responseData) {
             Task { @MainActor [weak self] in
-                self?.ncLevel = NoiseCancellationLevel(byte: ncByte)
+                self?.reflectUnsolicited(change)
             }
         }
     }
