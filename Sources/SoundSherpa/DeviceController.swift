@@ -42,6 +42,10 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
     var ncLevel: NoiseCancellationLevel?
     var selfVoiceLevel: SelfVoiceLevel?
 
+    // Sony cross-brand controls (nil for Bose).
+    var ancState: ANCState?
+    var equalizerState: EqualizerState?
+
     // Paired devices
     var pairedDevices: [PairedDeviceInfo] = []
 
@@ -326,6 +330,20 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
             if await self.applyChange(.selfVoice(level)) {
                 self.selfVoiceLevel = level
             }
+        }
+    }
+
+    func setANC(_ state: ANCState) {
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.applyChange(.anc(state)) { self.ancState = state }
+        }
+    }
+
+    func setEqualizer(_ state: EqualizerState) {
+        Task { [weak self] in
+            guard let self else { return }
+            if await self.applyChange(.equalizer(state)) { self.equalizerState = state }
         }
     }
 
@@ -819,6 +837,8 @@ final class DeviceController: NSObject, IOBluetoothRFCOMMChannelDelegate {
         if let v = state.buttonAction { self.buttonAction = v }
         if let v = state.promptLanguage { self.language = v }
         if let v = state.voicePromptsEnabled { self.voicePromptsEnabled = v }
+        if let v = state.anc { self.ancState = v }
+        if let v = state.equalizer { self.equalizerState = v }
 
         markDataAsFetched()
 

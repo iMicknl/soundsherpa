@@ -24,6 +24,21 @@ struct ContentTile: View {
                         onSelect: { controller.setNoiseCancellation($0) })
                 }
 
+                if controller.supportedFeatures.contains(.ambientLevel) {
+                    AmbientSection(state: controller.ancState,
+                                   onChange: { controller.setANC($0) })
+                }
+
+                if controller.supportedFeatures.contains(.equalizer) {
+                    SegmentedSection(
+                        title: "Equalizer",
+                        options: [(0x00, "Off", "slider.horizontal.3"),
+                                  (0x10, "Bright", "sun.max"),
+                                  (0x16, "Bass", "speaker.wave.3")],
+                        selection: controller.equalizerState?.presetId,
+                        onSelect: { controller.setEqualizer(EqualizerState(presetId: $0)) })
+                }
+
                 if controller.supportedFeatures.contains(.selfVoice) {
                     SegmentedSection(
                         title: "Self Voice",
