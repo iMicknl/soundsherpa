@@ -2,6 +2,9 @@ import SwiftUI
 import SoundSherpaCore
 
 struct ContentTile: View {
+    /// Closes the MenuBarExtra panel; forwarded to the footer's Settings action.
+    var dismissMenu: () -> Void = {}
+
     @Environment(DeviceController.self) private var controller
     @State private var showMore = false
 
@@ -74,7 +77,7 @@ struct ContentTile: View {
             }
 
             Divider()
-            TileFooter()
+            TileFooter(dismissMenu: dismissMenu)
         }
         .padding(.top, 12)
         .padding(.bottom, 6)

@@ -12,6 +12,13 @@ let package = Package(
             targets: ["SoundSherpa"]
         ),
     ],
+    dependencies: [
+        // MenuBarExtra(.window) has no first-party API to focus Settings or dismiss the
+        // panel from an .accessory app; these two libraries exist precisely to fill that
+        // gap. See [[soundsherpa-...]] / SettingsPresentation for the why.
+        .package(url: "https://github.com/orchetect/SettingsAccess", from: "2.1.0"),
+        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", from: "1.3.0"),
+    ],
     targets: [
         // Pure, hardware-free core: models, protocol codecs, device identification.
         // Imports only Foundation — no IOBluetooth, no AppKit — so it is unit-testable.
@@ -22,7 +29,11 @@ let package = Package(
         // Menu-bar executable: AppKit UI + IOBluetooth transport, built on the core.
         .executableTarget(
             name: "SoundSherpa",
-            dependencies: ["SoundSherpaCore"]
+            dependencies: [
+                "SoundSherpaCore",
+                .product(name: "SettingsAccess", package: "SettingsAccess"),
+                .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
+            ]
         ),
         .testTarget(
             name: "SoundSherpaCoreTests",

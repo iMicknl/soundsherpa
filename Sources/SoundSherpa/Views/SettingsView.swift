@@ -14,19 +14,54 @@ struct SettingsView: View {
     @State private var loginError: String?
     @State private var selection = Tab.general
 
+    /// Fixed content width; the window keeps this across tabs.
+    private let contentWidth: CGFloat = 460
+    /// Measured height of the selected tab's content (nil until first measured, so the
+    /// window starts at its intrinsic height rather than flashing a wrong fixed size).
+    @State private var contentHeight: CGFloat?
+
     var body: some View {
         TabView(selection: $selection) {
             generalTab.tabItem { Label("General", systemImage: "gearshape") }.tag(Tab.general)
             deviceTab.tabItem { Label("Device", systemImage: "headphones") }.tag(Tab.device)
             aboutTab.tabItem { Label("About", systemImage: "info.circle") }.tag(Tab.about)
         }
-        // Sized so the busiest tab (Device, when connected) fits without scrolling;
-        // the grouped Form and TabView supply their own insets, so no outer padding.
-        .frame(width: 460, height: 540)
+        // A SwiftUI TabView can't size to each tab on its own — it equalizes every tab to
+        // the tallest and can't animate per-tab. So we drive the height ourselves: an
+        // off-screen probe measures the *selected* tab's intrinsic content height and we
+        // pin the window to it. The window then fits each tab (General/About short, Device
+        // tall) and any device's feature set, with no scrollbar and no hand-tuned numbers.
+        .frame(width: contentWidth, height: contentHeight)
+        .background(heightProbe)
         // The Settings scene's view tree persists across window close/reopen, so the
         // TabView would otherwise reopen on whatever tab was last viewed. Reset to
         // General when the window closes so the next open always starts there.
         .background(WindowCloseObserver { selection = .general })
+    }
+
+    /// Renders the selected tab's content again, hidden and constrained only in width, so
+    /// it takes its natural height (a real TabView would force it to the tallest tab's
+    /// height instead). `onGeometryChange` reports that height into `contentHeight`.
+    /// The zero-size anchor + overlay keeps the probe from affecting the real layout.
+    private var heightProbe: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .overlay(alignment: .topLeading) {
+                selectedTabContent
+                    .frame(width: contentWidth)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                    .hidden()
+                    .allowsHitTesting(false)
+            }
+    }
+
+    @ViewBuilder private var selectedTabContent: some View {
+        switch selection {
+        case .general: generalTab
+        case .device: deviceTab
+        case .about: aboutTab
+        }
     }
 
     private var generalTab: some View {
