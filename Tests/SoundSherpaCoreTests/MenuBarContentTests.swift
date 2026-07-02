@@ -12,6 +12,13 @@ final class MenuBarContentTests: XCTestCase {
     func testShowsBattery() {
         XCTAssertFalse(MenuBarContent.iconOnly.showsBattery)
         XCTAssertTrue(MenuBarContent.iconAndBattery.showsBattery)
+        XCTAssertTrue(MenuBarContent.iconAndVerticalBattery.showsBattery)
+    }
+
+    func testBatteryStyle() {
+        XCTAssertNil(MenuBarContent.iconOnly.batteryStyle)
+        XCTAssertEqual(MenuBarContent.iconAndBattery.batteryStyle, .horizontalWithNumber)
+        XCTAssertEqual(MenuBarContent.iconAndVerticalBattery.batteryStyle, .verticalGlyph)
     }
 
     func testAllCasesHaveDisplayNames() {
