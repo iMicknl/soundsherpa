@@ -36,26 +36,31 @@ enum MenuBarIconRenderer {
     static func image(content: MenuBarContent, isConnected: Bool, batteryLevel: Int?) -> NSImage {
         let symbolName = content.connectionSymbolName(isConnected: isConnected)
 
-        guard let style = content.batteryStyle, let level = batteryLevel else {
-            return symbolImage(named: symbolName)
-        }
+        // Only show a battery when one is configured AND a level is available.
+        let style: MenuBarBatteryStyle? = batteryLevel == nil ? nil : content.batteryStyle
+        let level = batteryLevel ?? 0
 
-        let tier = DeviceDisplay.menuBarBatteryTier(forLevel: level)
+        // Normal charge (or no battery) → template (monochrome); low/critical → tinted.
+        let tier = style == nil ? .normal : DeviceDisplay.menuBarBatteryTier(forLevel: level)
         let color = tierColor(for: tier)
         let isTemplate = (tier == .normal)
 
-        let batteryWidth: CGFloat
+        // Width the headphones glyph plus, if shown, the battery column. Icon-only
+        // and battery modes share the same canvas + drawHeadphones so the glyph is
+        // identical in size across all modes.
+        var totalWidth = headphonesSize
         switch style {
-        case .horizontalWithNumber: batteryWidth = batteryBodyWidth + batteryNubWidth
-        case .verticalGlyph:        batteryWidth = vBatteryWidth
+        case .horizontalWithNumber: totalWidth += spacing + batteryBodyWidth + batteryNubWidth
+        case .verticalGlyph:        totalWidth += spacing + vBatteryWidth
+        case .none:                 break
         }
-        let totalWidth = headphonesSize + spacing + batteryWidth
 
         let image = NSImage(size: NSSize(width: totalWidth, height: height), flipped: false) { _ in
             drawHeadphones(named: symbolName, color: color)
             switch style {
             case .horizontalWithNumber: drawHorizontalBattery(level: level, color: color)
             case .verticalGlyph:        drawVerticalBattery(level: level, color: color)
+            case .none:                 break
             }
             return true
         }
@@ -138,14 +143,6 @@ enum MenuBarIconRenderer {
         let fill = NSRect(x: insetBody.minX, y: insetBody.minY,
                           width: insetBody.width, height: insetBody.height * fraction)
         NSBezierPath(roundedRect: fill, xRadius: 0.75, yRadius: 0.75).fill()
-    }
-
-    /// A single SF Symbol as a template image at the standard menu bar size.
-    private static func symbolImage(named symbolName: String) -> NSImage {
-        let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "SoundSherpa")
-            ?? NSImage()
-        image.isTemplate = true
-        return image
     }
 
     private static func tierColor(for tier: BatteryTier) -> NSColor {
