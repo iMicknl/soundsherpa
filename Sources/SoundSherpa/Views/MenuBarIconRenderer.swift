@@ -16,18 +16,27 @@ enum MenuBarIconRenderer {
     // only the aspect ratio and relative sizes matter here.
     private static let height: CGFloat = 18
     private static let headphonesSize: CGFloat = 18
+    private static let headphonesPointSize: CGFloat = 15
     private static let spacing: CGFloat = 3
-    private static let batteryBodyWidth: CGFloat = 24
-    private static let batteryBodyHeight: CGFloat = 12
-    private static let batteryNubWidth: CGFloat = 2
-    private static let batteryNubHeight: CGFloat = 6
+    private static let batteryBodyWidth: CGFloat = 14
+    private static let batteryBodyHeight: CGFloat = 7
+    private static let batteryNubWidth: CGFloat = 1
+    private static let batteryNubHeight: CGFloat = 3.5
+    private static let batteryFillInset: CGFloat = 1
+    private static let numberPointSize: CGFloat = 8
+
+    // Vertical battery glyph geometry.
+    private static let vBatteryWidth: CGFloat = 7
+    private static let vBatteryHeight: CGFloat = 12
+    private static let vBatteryNubWidth: CGFloat = 3
+    private static let vBatteryNubHeight: CGFloat = 1
 
     /// Build the menu bar image for the given state. When battery is not shown
     /// or no level is available, returns just the headphones glyph.
     static func image(content: MenuBarContent, isConnected: Bool, batteryLevel: Int?) -> NSImage {
         let symbolName = content.connectionSymbolName(isConnected: isConnected)
 
-        guard content.showsBattery, let level = batteryLevel else {
+        guard let style = content.batteryStyle, let level = batteryLevel else {
             return symbolImage(named: symbolName)
         }
 
@@ -35,10 +44,19 @@ enum MenuBarIconRenderer {
         let color = tierColor(for: tier)
         let isTemplate = (tier == .normal)
 
-        let totalWidth = headphonesSize + spacing + batteryBodyWidth + batteryNubWidth
+        let batteryWidth: CGFloat
+        switch style {
+        case .horizontalWithNumber: batteryWidth = batteryBodyWidth + batteryNubWidth
+        case .verticalGlyph:        batteryWidth = vBatteryWidth
+        }
+        let totalWidth = headphonesSize + spacing + batteryWidth
+
         let image = NSImage(size: NSSize(width: totalWidth, height: height), flipped: false) { _ in
             drawHeadphones(named: symbolName, color: color)
-            drawBattery(level: level, color: color)
+            switch style {
+            case .horizontalWithNumber: drawHorizontalBattery(level: level, color: color)
+            case .verticalGlyph:        drawVerticalBattery(level: level, color: color)
+            }
             return true
         }
         image.isTemplate = isTemplate
@@ -48,7 +66,7 @@ enum MenuBarIconRenderer {
     // MARK: - Drawing
 
     private static func drawHeadphones(named symbolName: String, color: NSColor) {
-        let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+        let config = NSImage.SymbolConfiguration(pointSize: headphonesPointSize, weight: .regular)
             .applying(.init(paletteColors: [color]))
         guard let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
             .withSymbolConfiguration(config) else { return }
@@ -59,30 +77,67 @@ enum MenuBarIconRenderer {
         symbol.draw(in: rect)
     }
 
-    private static func drawBattery(level: Int, color: NSColor) {
-        let bodyX = headphonesSize + spacing
-        let bodyY = (height - batteryBodyHeight) / 2
-        let body = NSRect(x: bodyX, y: bodyY, width: batteryBodyWidth, height: batteryBodyHeight)
+    /// Draws the number on the top row with the horizontal battery glyph
+    /// (proportionally filled) stacked directly below it, right of the headphones.
+    private static func drawHorizontalBattery(level: Int, color: NSColor) {
+        let columnX = headphonesSize + spacing
+
+        // Number on the top row.
+        let text = "\(level)"
+        let font = NSFont.systemFont(ofSize: numberPointSize, weight: .semibold)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        let textSize = (text as NSString).size(withAttributes: attrs)
+        let textX = columnX + (batteryBodyWidth - textSize.width) / 2
+        (text as NSString).draw(at: NSPoint(x: textX, y: height - textSize.height),
+                                withAttributes: attrs)
+
+        // Battery glyph on the bottom row.
+        let body = NSRect(x: columnX, y: 0, width: batteryBodyWidth, height: batteryBodyHeight)
 
         color.set()
 
         // Outline
-        let outline = NSBezierPath(roundedRect: body, xRadius: 2.5, yRadius: 2.5)
-        outline.lineWidth = 1.4
+        let outline = NSBezierPath(roundedRect: body, xRadius: 2, yRadius: 2)
+        outline.lineWidth = 1
         outline.stroke()
 
         // Positive terminal nub
-        let nub = NSRect(x: body.maxX, y: (height - batteryNubHeight) / 2,
+        let nub = NSRect(x: body.maxX, y: body.midY - batteryNubHeight / 2,
                          width: batteryNubWidth, height: batteryNubHeight)
-        NSBezierPath(roundedRect: nub, xRadius: 1, yRadius: 1).fill()
+        NSBezierPath(roundedRect: nub, xRadius: 0.75, yRadius: 0.75).fill()
 
-        // Percentage number, small, centered inside the battery body.
-        let text = "\(level)"
-        let font = NSFont.systemFont(ofSize: 8, weight: .bold)
-        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-        let size = (text as NSString).size(withAttributes: attrs)
-        let origin = NSPoint(x: body.midX - size.width / 2, y: body.midY - size.height / 2)
-        (text as NSString).draw(at: origin, withAttributes: attrs)
+        // Proportional fill inside the body, width tracks charge (like iOS/system).
+        let insetBody = body.insetBy(dx: batteryFillInset, dy: batteryFillInset)
+        let fraction = CGFloat(max(0, min(100, level))) / 100
+        let fill = NSRect(x: insetBody.minX, y: insetBody.minY,
+                          width: insetBody.width * fraction, height: insetBody.height)
+        NSBezierPath(roundedRect: fill, xRadius: 1, yRadius: 1).fill()
+    }
+
+    /// Draws a vertical battery glyph (nub on top) that fills from the bottom by
+    /// charge, no number. Right of the headphones, vertically centered.
+    private static func drawVerticalBattery(level: Int, color: NSColor) {
+        let bodyX = headphonesSize + spacing
+        // Center the full glyph (body + nub) so it sits visually centered.
+        let bodyY = (height - (vBatteryHeight + vBatteryNubHeight)) / 2
+        let body = NSRect(x: bodyX, y: bodyY, width: vBatteryWidth, height: vBatteryHeight)
+
+        color.set()
+
+        // Outline
+        NSBezierPath(roundedRect: body, xRadius: 2, yRadius: 2).stroke()
+
+        // Positive terminal nub, centered on top.
+        let nub = NSRect(x: body.midX - vBatteryNubWidth / 2, y: body.maxY,
+                         width: vBatteryNubWidth, height: vBatteryNubHeight)
+        NSBezierPath(roundedRect: nub, xRadius: 0.5, yRadius: 0.5).fill()
+
+        // Proportional fill from the bottom, height tracks charge.
+        let insetBody = body.insetBy(dx: batteryFillInset, dy: batteryFillInset)
+        let fraction = CGFloat(max(0, min(100, level))) / 100
+        let fill = NSRect(x: insetBody.minX, y: insetBody.minY,
+                          width: insetBody.width, height: insetBody.height * fraction)
+        NSBezierPath(roundedRect: fill, xRadius: 0.75, yRadius: 0.75).fill()
     }
 
     /// A single SF Symbol as a template image at the standard menu bar size.
